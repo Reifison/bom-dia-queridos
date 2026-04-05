@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --font-headline: "Plus Jakarta Sans", sans-serif;
+  --font-body: "Be Vietnam Pro", sans-serif;
+  
+  --color-theme-surface: #f7f6f5;
+  --color-theme-surface-lowest: #ffffff;
+  --color-theme-primary: #864d2c;
+  --color-theme-primary-container: #feb289;
+  --color-theme-on-surface: #2e2f2f;
+  --color-theme-on-surface-variant: #5b5c5b;
+  --color-theme-secondary-fixed: #f9d461;
+}
+
+body {
+  background-color: var(--color-theme-surface);
+  color: var(--color-theme-on-surface);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-headline);
+}
