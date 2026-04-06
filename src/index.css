@@ -11,6 +11,13 @@
   --color-theme-on-surface: #2e2f2f;
   --color-theme-on-surface-variant: #5b5c5b;
   --color-theme-secondary-fixed: #f9d461;
+
+  --color-theme-action-share-bg: #dcfce7;
+  --color-theme-action-share-fg: #166534;
+  --color-theme-action-generate-bg: #e0f2fe;
+  --color-theme-action-generate-fg: #075985;
+  --color-theme-action-disabled-bg: #f3f4f6;
+  --color-theme-action-disabled-fg: #9ca3af;
 }
 
 body {
