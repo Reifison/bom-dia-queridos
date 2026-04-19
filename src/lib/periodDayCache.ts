@@ -23,7 +23,10 @@ export function loadSessionPeriodDayMessages(): Partial<Record<PeriodId, PeriodD
       if (!raw) continue;
       const parsed = JSON.parse(raw) as { day?: string; message?: DailyMessage };
       if (parsed.day !== today || !parsed.message || parsed.message.periodId !== id) continue;
-      result[id] = { day: parsed.day, message: parsed.message };
+      const msg = parsed.message.generationId
+        ? parsed.message
+        : { ...parsed.message, generationId: `cached-${id}-${parsed.day}` };
+      result[id] = { day: parsed.day, message: msg };
     } catch {
       // ignore
     }

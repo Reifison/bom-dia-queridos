@@ -33,6 +33,7 @@ export function DetailView({
 
       <div className="relative w-full aspect-[4/5] rounded-[2rem] overflow-hidden shadow-2xl border border-black/5 bg-black">
         <img
+          key={message.generationId}
           src={message.image}
           alt="Mensagem do dia"
           fetchPriority="high"

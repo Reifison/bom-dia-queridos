@@ -68,7 +68,10 @@ async function firstInlineAsDataUrl(
   return null;
 }
 
-export async function generateDailyMessage(period: PeriodId): Promise<{ mainText: string; quote?: string }> {
+export async function generateDailyMessage(
+  period: PeriodId,
+  options?: { variationKey?: string }
+): Promise<{ mainText: string; quote?: string }> {
   const ai = getClient();
 
   const periodNames = {
@@ -77,11 +80,15 @@ export async function generateDailyMessage(period: PeriodId): Promise<{ mainText
     night: 'noite',
   };
 
+  const variationBlock = options?.variationKey
+    ? `\n\nIMPORTANTE — pedido id ${options.variationKey}: este pedido DEVE produzir texto totalmente NOVO e diferente de qualquer resposta anterior (varie vocabulário, ritmo, imagem da frase e, se houver quote, o autor ou filme).`
+    : '';
+
   const prompt = `Crie uma mensagem motivacional curta e acolhedora para o período da ${periodNames[period]}.
     A mensagem deve ser otimista, fácil de ler e perfeita para compartilhar no WhatsApp.
     Retorne um JSON com:
     - mainText: A frase principal (obrigatório).
-    - quote: Uma citação curta de um autor ou filme (opcional, use apenas se agregar valor).`;
+    - quote: Uma citação curta de um autor ou filme (opcional, use apenas se agregar valor).${variationBlock}`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3.1-flash-lite-preview',
@@ -108,7 +115,10 @@ export async function generateDailyMessage(period: PeriodId): Promise<{ mainText
 /**
  * Várias tentativas: quotas/modelos variam por chave e região; a API também pode devolver 200 sem inlineData (safety).
  */
-export async function generateDailyImage(period: PeriodId): Promise<string> {
+export async function generateDailyImage(
+  period: PeriodId,
+  options?: { variationKey?: string }
+): Promise<string> {
   const ai = getClient();
 
   const periodPrompts = {
@@ -120,7 +130,11 @@ export async function generateDailyImage(period: PeriodId): Promise<string> {
       'Céu estrelado, lua, paisagem noturna serena, luzes suaves, fotografia de alta qualidade, pacífico, sem texto.',
   };
 
-  const text = periodPrompts[period];
+  const variationBlock = options?.variationKey
+    ? ` Variação visual única [pedido ${options.variationKey}]: altere enquadramento, paleta de cores predominante, perspetiva e pequenos detalhes da cena para que a imagem seja claramente diferente de qualquer geração anterior com o mesmo tema.`
+    : '';
+
+  const text = `${periodPrompts[period]}${variationBlock}`;
 
   const attempts: { label: string; params: GenerateContentParameters }[] = [
     {

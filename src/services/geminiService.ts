@@ -2,6 +2,13 @@ import { buildApiUrl } from '../lib/apiBase';
 import { devLog } from '../lib/logger';
 import type { PeriodId } from '../types/period';
 
+export function createVariationKey(): string {
+  if (typeof globalThis.crypto !== 'undefined' && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
 function throwApiFailure(path: string, res: Response, data: unknown): never {
   const code =
     data && typeof data === 'object' && data !== null && 'error' in data
@@ -15,11 +22,21 @@ function throwApiFailure(path: string, res: Response, data: unknown): never {
 
 async function postJson<T>(path: string, body: object): Promise<T> {
   const url = buildApiUrl(path);
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    if (e instanceof TypeError) {
+      const err = new Error('NETWORK_ERROR') as Error & { httpStatus: number };
+      err.httpStatus = 0;
+      throw err;
+    }
+    throw e;
+  }
 
   let data: unknown = null;
   try {
@@ -36,12 +53,13 @@ async function postJson<T>(path: string, body: object): Promise<T> {
 }
 
 export async function generateDailyMessage(
-  period: PeriodId
+  period: PeriodId,
+  variationKey: string
 ): Promise<{ mainText: string; quote?: string }> {
-  return postJson('/api/generate-message', { period });
+  return postJson('/api/generate-message', { period, variationKey });
 }
 
-export async function generateDailyImage(period: PeriodId): Promise<string> {
-  const { image } = await postJson<{ image: string }>('/api/generate-image', { period });
+export async function generateDailyImage(period: PeriodId, variationKey: string): Promise<string> {
+  const { image } = await postJson<{ image: string }>('/api/generate-image', { period, variationKey });
   return image;
 }

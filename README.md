@@ -30,6 +30,22 @@ View your app in AI Studio: https://ai.studio/apps/f084459c-2017-4407-a2a6-5486d
 
 `npm run preview` (Vite only) does not start the API; use `npm run dev` or deploy the Node server above.
 
+### App Store / TestFlight (Capacitor iOS)
+
+O binário que os utilizadores instalam **não inclui** o servidor Node. O `fetch` usa o URL que foi **gravado no build** em `VITE_API_ORIGIN`. Se esse valor for `http://127.0.0.1:8787` ou `http://localhost:...`, no telefone o pedido vai para o **próprio telefone**, não para o seu Mac — a geração falha sempre.
+
+**O que fazer:**
+
+1. Aloje a API Express (`server/index.ts`) num serviço com HTTPS (Railway, Fly.io, Render, Google Cloud Run, VPS com nginx + certificado, etc.).
+2. Nesse ambiente, defina `GEMINI_API_KEY` e `PORT` (ou o que o fornecedor exigir). Confirme que `POST /api/generate-message` e `POST /api/generate-image` respondem.
+3. No repositório, crie **`.env.production`** (ou `.env.production.local`, gitignored) com a origem **pública** da API, por exemplo:
+   - `VITE_API_ORIGIN=https://api.seudominio.com`
+4. Gere de novo o bundle e sincronize o iOS: `npm run ios:sync`, depois arquive e submeta no App Store Connect.
+
+O servidor já envia CORS para `capacitor://localhost`, que é a origem do WKWebView na App Store — não precisa de alterar isso para o iOS nativo. Use sempre **HTTPS** na API em produção para satisfazer o App Transport Security.
+
+**Nota:** `npm run ios:sync` usa `vite build` (modo produção). Se só tiver `VITE_API_ORIGIN` para o simulador em `.env.local`, esse URL fica no IPA — útil no Xcode, mas **inútil para utilizadores reais**. Para submeter à App Store, use `.env.production` / `.env.production.local` com o URL HTTPS da API (ou sobrescreva só no pipeline de release).
+
 ## Testar no Xcode (iOS)
 
 O projeto usa **[Capacitor](https://capacitorjs.com/)**; a pasta `ios/` é o projeto nativo.

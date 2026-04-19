@@ -7,8 +7,8 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * - Descomente `server.url` com http://localhost:3000 e rode `npm run dev` antes do Run no Xcode.
  * - Em iPhone físico, use o IP da sua rede (ex: http://192.168.1.10:3000) e `cleartext: true`.
  *
- * Build estático sem server.url:
- * - Defina VITE_API_ORIGIN no .env.production com a URL HTTPS da sua API em produção.
+ * Build estático sem server.url (App Store):
+ * - `.env.production`: VITE_API_ORIGIN=https://sua-api-publica (obrigatório; localhost no bundle não funciona nos telefones).
  */
 const config: CapacitorConfig = {
   appId: 'com.bomdiaqueridos.app',

@@ -21,9 +21,10 @@ const isProd = process.env.NODE_ENV === 'production';
 
 function isAllowedCorsOrigin(origin: string | undefined): origin is string {
   if (!origin) return false;
+  const o = origin.replace(/\/+$/, '');
   return (
-    /^(capacitor|ionic):\/\/localhost$/i.test(origin) ||
-    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
+    /^(capacitor|ionic):\/\/localhost$/i.test(o) ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(o)
   );
 }
 
@@ -72,14 +73,30 @@ function parsePeriod(body: unknown): PeriodId | null {
   return p as PeriodId;
 }
 
+/** O cliente gera UUID por pedido para variar prompts e evitar saídas idênticas entre cliques. */
+function parseVariationKey(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || !('variationKey' in body)) {
+    return undefined;
+  }
+  const v = (body as { variationKey: unknown }).variationKey;
+  if (typeof v !== 'string' || v.length < 8 || v.length > 128) {
+    return undefined;
+  }
+  if (!/^[0-9a-zA-Z-]+$/.test(v)) {
+    return undefined;
+  }
+  return v;
+}
+
 app.post('/api/generate-message', apiLimiter, async (req, res) => {
   const period = parsePeriod(req.body);
   if (!period) {
     res.status(400).json({ error: 'INVALID_BODY' });
     return;
   }
+  const variationKey = parseVariationKey(req.body);
   try {
-    const data = await generateDailyMessage(period);
+    const data = await generateDailyMessage(period, { variationKey });
     res.json(data);
   } catch (err) {
     if (err instanceof Error && err.message === 'GEMINI_API_KEY_MISSING') {
@@ -101,8 +118,9 @@ app.post('/api/generate-image', apiLimiter, async (req, res) => {
     res.status(400).json({ error: 'INVALID_BODY' });
     return;
   }
+  const variationKey = parseVariationKey(req.body);
   try {
-    const image = await generateDailyImage(period);
+    const image = await generateDailyImage(period, { variationKey });
     res.json({ image });
   } catch (err) {
     if (err instanceof Error && err.message === 'GEMINI_API_KEY_MISSING') {

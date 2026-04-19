@@ -14,4 +14,6 @@ export interface DailyMessage {
   mainText: string;
   quote?: string;
   image: string;
+  /** Id único por geração (UI / remount da imagem). */
+  generationId: string;
 }

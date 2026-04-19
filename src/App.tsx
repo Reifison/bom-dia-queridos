@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bookmark, Home } from 'lucide-react';
 import { AdBannerPlaceholder } from './components/ads/AdBannerPlaceholder';
+import { BannerAdNative } from './components/ads/BannerAdNative';
 import { InterstitialAdMock } from './components/ads/InterstitialAdMock';
 import { SettingsNavButton } from './components/navigation/SettingsNavButton';
 import { ADS_ENABLED, SHOW_SETTINGS_NAV } from './constants/featureFlags';
@@ -10,6 +12,7 @@ import { DetailView } from './features/detail/DetailView';
 import { HomeView } from './features/home/HomeView';
 import { useDailyGeneration } from './hooks/useDailyGeneration';
 import { devLog } from './lib/logger';
+import { ensureAdMobInitialized, presentInterstitialAd } from './services/adMobService';
 import {
   getTodayLocal,
   loadSessionPeriodDayMessages,
@@ -40,12 +43,19 @@ export default function App() {
   };
 
   const handleSelectPeriod = (period: Period) => {
-    if (ADS_ENABLED) {
-      setPendingPeriod(period);
-      setShowInterstitial(true);
-    } else {
+    if (!ADS_ENABLED) {
       goToDetail(period);
+      return;
     }
+    if (Capacitor.isNativePlatform()) {
+      // Ir já para o detalhe antes do intersticial: o anúncio nativo cobre o WebView; ao fechar, o estado
+      // já é `detail`, evitando um flash da home que ocorria ao navegar só depois do dismiss.
+      goToDetail(period);
+      void presentInterstitialAd();
+      return;
+    }
+    setPendingPeriod(period);
+    setShowInterstitial(true);
   };
 
   const proceedToDetail = () => {
@@ -98,6 +108,11 @@ export default function App() {
     };
   }, [currentView, selectedPeriod?.id, autoGenerateForPeriod, persistPeriodDayMessage]);
 
+  useEffect(() => {
+    if (!ADS_ENABLED || !Capacitor.isNativePlatform()) return;
+    void ensureAdMobInitialized().catch(() => {});
+  }, []);
+
   const handleShare = async () => {
     if (!currentMessage || !selectedPeriod) return;
 
@@ -122,7 +137,7 @@ export default function App() {
     <div className="min-h-screen bg-theme-surface flex justify-center overflow-hidden">
       <div className="w-full max-w-md bg-theme-surface relative flex flex-col shadow-2xl overflow-hidden">
         <AnimatePresence>
-          {ADS_ENABLED && showInterstitial && (
+          {ADS_ENABLED && showInterstitial && !Capacitor.isNativePlatform() && (
             <motion.div
               initial={{ opacity: 0, y: 50 }}
               animate={{ opacity: 1, y: 0 }}
@@ -134,7 +149,8 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {ADS_ENABLED && <AdBannerPlaceholder position="top" />}
+        {ADS_ENABLED && Capacitor.isNativePlatform() && <BannerAdNative />}
+        {ADS_ENABLED && !Capacitor.isNativePlatform() && <AdBannerPlaceholder position="top" />}
 
         <AnimatePresence mode="wait">
           {currentView === 'home' ? (
@@ -173,7 +189,7 @@ export default function App() {
         </AnimatePresence>
 
         <div className="absolute bottom-0 left-0 w-full z-50 flex flex-col">
-          {ADS_ENABLED && <AdBannerPlaceholder position="bottom" />}
+          {ADS_ENABLED && !Capacitor.isNativePlatform() && <AdBannerPlaceholder position="bottom" />}
 
           <div className="w-full h-20 flex justify-around items-center px-8 pb-2 bg-white/90 backdrop-blur-xl border-t border-gray-100 shadow-[0_-4px_24px_rgba(0,0,0,0.02)]">
             <button

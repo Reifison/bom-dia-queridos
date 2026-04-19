@@ -11,6 +11,10 @@ export default defineConfig(({ mode }) => {
     // Relative paths so Capacitor/WKWebView loads JS/CSS from the app bundle.
     base: './',
     plugins: [react(), tailwindcss()],
+    // Só o index.html como entrada — evita que o scanner siga JS antigo em ios/App/.../public (cap sync).
+    optimizeDeps: {
+      entries: [path.resolve(__dirname, 'index.html')],
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
@@ -18,6 +22,9 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
+      watch: {
+        ignored: ['**/ios/**', '**/android/**'],
+      },
       proxy: {
         '/api': {
           target: `http://127.0.0.1:${API_PORT}`,

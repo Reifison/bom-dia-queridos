@@ -1,6 +1,10 @@
 import { useCallback, useRef, useState } from 'react';
 import { devLog } from '../lib/logger';
-import { generateDailyImage, generateDailyMessage } from '../services/geminiService';
+import {
+  createVariationKey,
+  generateDailyImage,
+  generateDailyMessage,
+} from '../services/geminiService';
 import type { DailyMessage, PeriodId } from '../types/period';
 
 const USER_ERROR = 'Não foi possível gerar agora. Tente de novo em instantes.';
@@ -10,6 +14,9 @@ const QUOTA_ERROR =
 
 const MISSING_API_URL_ERROR =
   'O app iOS não sabe onde está a API. No ficheiro .env.local defina VITE_API_ORIGIN=http://127.0.0.1:8787 (simulador) ou http://IP-DO-MAC:8787 (iPhone na mesma Wi‑Fi). Depois: npm run ios:sync e volte a abrir no Xcode. No Mac, mantenha npm run start a correr.';
+
+const NETWORK_ERROR =
+  'Não foi possível ligar ao servidor da API. Verifique a internet ou tente mais tarde. Em produção, a API tem de estar alojada num URL HTTPS acessível (não use 127.0.0.1 no build da App Store).';
 
 const INITIAL_REMAINING: Record<PeriodId, number> = {
   morning: 1,
@@ -33,6 +40,8 @@ export function useDailyGeneration() {
     const code = e instanceof Error ? e.message : '';
     if (code === 'MISSING_VITE_API_ORIGIN') {
       alert(MISSING_API_URL_ERROR);
+    } else if (code === 'NETWORK_ERROR') {
+      alert(NETWORK_ERROR);
     } else if (http === 429 || code === 'QUOTA_EXCEEDED') {
       alert(QUOTA_ERROR);
     } else {
@@ -41,15 +50,17 @@ export function useDailyGeneration() {
   }, []);
 
   const fetchAndBuildMessage = useCallback(async (periodId: PeriodId): Promise<DailyMessage> => {
+    const generationId = createVariationKey();
     const [newTextData, imagePayload] = await Promise.all([
-      generateDailyMessage(periodId),
-      generateDailyImage(periodId),
+      generateDailyMessage(periodId, generationId),
+      generateDailyImage(periodId, generationId),
     ]);
     return {
       periodId,
       mainText: newTextData.mainText,
       quote: newTextData.quote,
       image: imagePayload,
+      generationId,
     };
   }, []);
 

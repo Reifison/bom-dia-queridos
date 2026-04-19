@@ -39,11 +39,13 @@ export const INITIAL_MESSAGES: Record<PeriodId, DailyMessage> = {
     mainText: 'Que o seu dia seja repleto de amor e esperança.',
     quote: "('O amor é a força mais poderosa do universo.' – Filme Uma Prova de Amor)",
     image: us('photo-1518895949257-7621c3c786d7'),
+    generationId: 'initial-morning',
   },
   afternoon: {
     periodId: 'afternoon',
     mainText: 'Aproveite a tarde para respirar e recarregar as energias.',
     image: us('photo-1517849845537-4d257902454a'),
+    generationId: 'initial-afternoon',
   },
   night: {
     periodId: 'night',
@@ -51,5 +53,6 @@ export const INITIAL_MESSAGES: Record<PeriodId, DailyMessage> = {
     quote:
       "('A felicidade pode ser encontrada mesmo nas horas mais sombrias, se a pessoa se lembrar de acender a luz.' – Harry Potter)",
     image: us('photo-1534361960057-19889db9621e'),
+    generationId: 'initial-night',
   },
 };
