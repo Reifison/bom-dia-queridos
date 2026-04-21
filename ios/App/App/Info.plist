@@ -48,7 +48,7 @@
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<string>ca-app-pub-1257467824403671~2501640483</string>
 	<key>NSUserTrackingUsageDescription</key>
 	<string>Usamos este identificador para mostrar anúncios mais relevantes.</string>
 	<key>SKAdNetworkItems</key>

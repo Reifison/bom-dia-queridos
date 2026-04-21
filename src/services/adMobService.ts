@@ -19,6 +19,16 @@ export function ensureAdMobInitialized(): Promise<void> {
   return initPromise;
 }
 
+/** Garante que nenhum banner nativo fique visível (ex.: após desativar banners ou hot reload). */
+export async function removeNativeBanner(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await AdMob.removeBanner();
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Loads and shows a full-screen interstitial; invokes `onFinished` at most once
  * (dismissed, failed to load, failed to show, or error). Omit when nothing must run after.

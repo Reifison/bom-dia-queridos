@@ -5,8 +5,11 @@ export const FEATURE_FLAGS = {
   ENABLE_NIGHT: true,
 } as const;
 
-/** Banners e intersticial (AdMob nativo no iOS; mock no browser). `false` = tudo desligado. */
+/** Intersticial e (se ativo) banners AdMob nativos no iOS; mock de intersticial no browser. `false` = tudo desligado. */
 export const ADS_ENABLED = true;
+
+/** Banner horizontal (home e detalhe). `false` = sem banner; intersticial não é afetado. */
+export const BANNER_ADS_ENABLED = false;
 
 /** Terceiro item da barra inferior (Ajustes). `true` quando a ecrã de ajustes existir. */
 export const SHOW_SETTINGS_NAV = false;

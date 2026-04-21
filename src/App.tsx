@@ -6,13 +6,17 @@ import { AdBannerPlaceholder } from './components/ads/AdBannerPlaceholder';
 import { BannerAdNative } from './components/ads/BannerAdNative';
 import { InterstitialAdMock } from './components/ads/InterstitialAdMock';
 import { SettingsNavButton } from './components/navigation/SettingsNavButton';
-import { ADS_ENABLED, SHOW_SETTINGS_NAV } from './constants/featureFlags';
+import { ADS_ENABLED, BANNER_ADS_ENABLED, SHOW_SETTINGS_NAV } from './constants/featureFlags';
 import { INITIAL_MESSAGES } from './constants/content';
 import { DetailView } from './features/detail/DetailView';
 import { HomeView } from './features/home/HomeView';
 import { useDailyGeneration } from './hooks/useDailyGeneration';
 import { devLog } from './lib/logger';
-import { ensureAdMobInitialized, presentInterstitialAd } from './services/adMobService';
+import {
+  ensureAdMobInitialized,
+  presentInterstitialAd,
+  removeNativeBanner,
+} from './services/adMobService';
 import {
   getTodayLocal,
   loadSessionPeriodDayMessages,
@@ -110,7 +114,16 @@ export default function App() {
 
   useEffect(() => {
     if (!ADS_ENABLED || !Capacitor.isNativePlatform()) return;
-    void ensureAdMobInitialized().catch(() => {});
+    void (async () => {
+      try {
+        await ensureAdMobInitialized();
+        if (!BANNER_ADS_ENABLED) {
+          await removeNativeBanner();
+        }
+      } catch {
+        // ignore
+      }
+    })();
   }, []);
 
   const handleShare = async () => {
@@ -149,8 +162,10 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {ADS_ENABLED && Capacitor.isNativePlatform() && <BannerAdNative />}
-        {ADS_ENABLED && !Capacitor.isNativePlatform() && <AdBannerPlaceholder position="top" />}
+        {ADS_ENABLED && BANNER_ADS_ENABLED && Capacitor.isNativePlatform() && <BannerAdNative />}
+        {ADS_ENABLED && BANNER_ADS_ENABLED && !Capacitor.isNativePlatform() && (
+          <AdBannerPlaceholder position="top" />
+        )}
 
         <AnimatePresence mode="wait">
           {currentView === 'home' ? (
@@ -160,7 +175,11 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
               transition={{ duration: 0.3 }}
-              className={ADS_ENABLED ? 'flex-1 overflow-y-auto pb-40' : 'flex-1 overflow-y-auto pb-24'}
+              className={
+                ADS_ENABLED && BANNER_ADS_ENABLED
+                  ? 'flex-1 overflow-y-auto pb-40'
+                  : 'flex-1 overflow-y-auto pb-24'
+              }
             >
               <HomeView onSelect={handleSelectPeriod} />
             </motion.div>
@@ -171,7 +190,11 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
               transition={{ duration: 0.3 }}
-              className={ADS_ENABLED ? 'flex-1 overflow-y-auto pb-40 bg-theme-surface' : 'flex-1 overflow-y-auto pb-24 bg-theme-surface'}
+              className={
+                ADS_ENABLED && BANNER_ADS_ENABLED
+                  ? 'flex-1 overflow-y-auto pb-40 bg-theme-surface'
+                  : 'flex-1 overflow-y-auto pb-24 bg-theme-surface'
+              }
             >
               {selectedPeriod && currentMessage && (
                 <DetailView
@@ -189,7 +212,9 @@ export default function App() {
         </AnimatePresence>
 
         <div className="absolute bottom-0 left-0 w-full z-50 flex flex-col">
-          {ADS_ENABLED && !Capacitor.isNativePlatform() && <AdBannerPlaceholder position="bottom" />}
+          {ADS_ENABLED && BANNER_ADS_ENABLED && !Capacitor.isNativePlatform() && (
+            <AdBannerPlaceholder position="bottom" />
+          )}
 
           <div className="w-full h-20 flex justify-around items-center px-8 pb-2 bg-white/90 backdrop-blur-xl border-t border-gray-100 shadow-[0_-4px_24px_rgba(0,0,0,0.02)]">
             <button

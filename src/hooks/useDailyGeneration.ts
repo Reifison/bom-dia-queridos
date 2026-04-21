@@ -9,15 +9,6 @@ import type { DailyMessage, PeriodId } from '../types/period';
 
 const USER_ERROR = 'Não foi possível gerar agora. Tente de novo em instantes.';
 
-const QUOTA_ERROR =
-  'Limite da API Google (Gemini) atingido: quota do plano gratuito esgotada ou demasiados pedidos. Ative faturação em Google AI Studio / Google Cloud Billing ou tente mais tarde.';
-
-const MISSING_API_URL_ERROR =
-  'O app iOS não sabe onde está a API. No ficheiro .env.local defina VITE_API_ORIGIN=http://127.0.0.1:8787 (simulador) ou http://IP-DO-MAC:8787 (iPhone na mesma Wi‑Fi). Depois: npm run ios:sync e volte a abrir no Xcode. No Mac, mantenha npm run start a correr.';
-
-const NETWORK_ERROR =
-  'Não foi possível ligar ao servidor da API. Verifique a internet ou tente mais tarde. Em produção, a API tem de estar alojada num URL HTTPS acessível (não use 127.0.0.1 no build da App Store).';
-
 const INITIAL_REMAINING: Record<PeriodId, number> = {
   morning: 1,
   afternoon: 1,
@@ -32,39 +23,29 @@ export function useDailyGeneration() {
   const manualGenerationLockRef = useRef(false);
 
   const handleGenerationError = useCallback((e: unknown) => {
-    devLog.error('Generation failed');
-    const http =
-      typeof e === 'object' && e !== null && 'httpStatus' in e
-        ? (e as { httpStatus: number }).httpStatus
-        : 0;
-    const code = e instanceof Error ? e.message : '';
-    if (code === 'MISSING_VITE_API_ORIGIN') {
-      alert(MISSING_API_URL_ERROR);
-    } else if (code === 'NETWORK_ERROR') {
-      alert(NETWORK_ERROR);
-    } else if (http === 429 || code === 'QUOTA_EXCEEDED') {
-      alert(QUOTA_ERROR);
-    } else {
-      alert(USER_ERROR);
-    }
+    devLog.error('Generation failed', e);
+    alert(USER_ERROR);
   }, []);
 
   const fetchAndBuildMessage = useCallback(async (periodId: PeriodId): Promise<DailyMessage> => {
     const generationId = createVariationKey();
+    
+    // Chamada para o backend que corrigimos
     const [newTextData, imagePayload] = await Promise.all([
       generateDailyMessage(periodId, generationId),
       generateDailyImage(periodId, generationId),
     ]);
+
     return {
       periodId,
-      mainText: newTextData.mainText,
-      quote: newTextData.quote,
-      image: imagePayload,
+      mainText: newTextData.mainText || 'Bom dia!',
+      quote: newTextData.quote || '',
+      // Tratamento seguro para a imagem (dataUrl)
+      image: typeof imagePayload === 'string' ? imagePayload : (imagePayload?.dataUrl || ''),
       generationId,
     };
   }, []);
 
-  /** Entrada no detalhe: uma geração por período por dia, independente dos outros menus. */
   const autoGenerateForPeriod = useCallback(
     async (periodId: PeriodId, applyMessage: (msg: DailyMessage) => void) => {
       setIsGenerating(true);
