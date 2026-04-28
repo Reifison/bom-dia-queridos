@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bookmark, Home } from 'lucide-react';
 import { AdBannerPlaceholder } from './components/ads/AdBannerPlaceholder';
 import { BannerAdNative } from './components/ads/BannerAdNative';
-import { InterstitialAdMock } from './components/ads/InterstitialAdMock';
 import { SettingsNavButton } from './components/navigation/SettingsNavButton';
 import { ADS_ENABLED, BANNER_ADS_ENABLED, SHOW_SETTINGS_NAV } from './constants/featureFlags';
 import { INITIAL_MESSAGES } from './constants/content';
@@ -14,14 +14,17 @@ import { useDailyGeneration } from './hooks/useDailyGeneration';
 import { devLog } from './lib/logger';
 import {
   ensureAdMobInitialized,
-  presentInterstitialAd,
+  prepareInterstitialAd,
   removeNativeBanner,
+  showInterstitialAd,
 } from './services/adMobService';
+import { requestTrackingPermission } from './services/attService';
 import {
   getTodayLocal,
   loadSessionPeriodDayMessages,
   saveSessionPeriodDayMessage,
 } from './lib/periodDayCache';
+import { registerDetailBackAndShouldShowAd } from './lib/interstitialCounter';
 import type { DailyMessage, Period, PeriodId } from './types/period';
 
 export default function App() {
@@ -31,12 +34,11 @@ export default function App() {
   const [periodTodayMessages, setPeriodTodayMessages] = useState(() => loadSessionPeriodDayMessages());
   const periodTodayMessagesRef = useRef(periodTodayMessages);
   periodTodayMessagesRef.current = periodTodayMessages;
+  const trackingPermissionRequestedRef = useRef(false);
+  const admobReadyRef = useRef(false);
 
   const { generationsRemaining, isGenerating, generateForPeriod, autoGenerateForPeriod } =
     useDailyGeneration();
-
-  const [showInterstitial, setShowInterstitial] = useState(false);
-  const [pendingPeriod, setPendingPeriod] = useState<Period | null>(null);
 
   const goToDetail = (period: Period) => {
     setSelectedPeriod(period);
@@ -46,28 +48,10 @@ export default function App() {
     setCurrentView('detail');
   };
 
+  // Apple Guideline 4 (Design): a entrada no detalhe é INSTANTÂNEA e LIMPA — sem ads, sem delay.
+  // Nunca chamar showInterstitialAd() aqui.
   const handleSelectPeriod = (period: Period) => {
-    if (!ADS_ENABLED) {
-      goToDetail(period);
-      return;
-    }
-    if (Capacitor.isNativePlatform()) {
-      // Ir já para o detalhe antes do intersticial: o anúncio nativo cobre o WebView; ao fechar, o estado
-      // já é `detail`, evitando um flash da home que ocorria ao navegar só depois do dismiss.
-      goToDetail(period);
-      void presentInterstitialAd();
-      return;
-    }
-    setPendingPeriod(period);
-    setShowInterstitial(true);
-  };
-
-  const proceedToDetail = () => {
-    setShowInterstitial(false);
-    if (pendingPeriod) {
-      goToDetail(pendingPeriod);
-      setPendingPeriod(null);
-    }
+    goToDetail(period);
   };
 
   const handleBack = () => {
@@ -76,6 +60,18 @@ export default function App() {
       setSelectedPeriod(null);
       setCurrentMessage(null);
     }, 300);
+
+    // Único ponto onde o intersticial é disparado: na saída para a home, após o utilizador
+    // ter consumido o detalhe. Primeira volta é livre; a cada N voltas o ad mostra-se.
+    if (!ADS_ENABLED) return;
+    if (!admobReadyRef.current) return;
+    if (!registerDetailBackAndShouldShowAd()) return;
+    setTimeout(() => {
+      void showInterstitialAd(() => {
+        // Pré-carrega o próximo intersticial para a próxima volta elegível.
+        void prepareInterstitialAd();
+      });
+    }, 350);
   };
 
   const persistPeriodDayMessage = useCallback((periodId: PeriodId, msg: DailyMessage) => {
@@ -114,16 +110,54 @@ export default function App() {
 
   useEffect(() => {
     if (!ADS_ENABLED || !Capacitor.isNativePlatform()) return;
-    void (async () => {
+
+    let cancelled = false;
+    let attDelay: ReturnType<typeof setTimeout> | null = null;
+
+    const initializeAdsAfterATT = async () => {
+      if (cancelled || trackingPermissionRequestedRef.current) return;
+      trackingPermissionRequestedRef.current = true;
+
       try {
+        // Apple Guideline 2.1: solicitar ATT ANTES de inicializar qualquer SDK de anúncios.
+        // Este código só roda com o app ativo; o AdMob só avança depois da resposta.
+        await requestTrackingPermission();
+
+        if (cancelled) return;
         await ensureAdMobInitialized();
         if (!BANNER_ADS_ENABLED) {
           await removeNativeBanner();
         }
+        // Pré-carrega o intersticial em cache em background. Não exibe nada — só fica
+        // pronto para `showInterstitialAd()` ser chamado depois por uma ação do utilizador.
+        await prepareInterstitialAd();
+        admobReadyRef.current = true;
       } catch {
         // ignore
       }
-    })();
+    };
+
+    const scheduleATTWhenActive = (isActive: boolean) => {
+      if (!isActive || trackingPermissionRequestedRef.current) return;
+      attDelay = setTimeout(() => {
+        void initializeAdsAfterATT();
+      }, 500);
+    };
+
+    const listenerPromise = CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      scheduleATTWhenActive(isActive);
+    });
+
+    // Se o listener for registado depois do app já estar ativo, ainda assim disparamos o fluxo.
+    void CapacitorApp.getState().then(({ isActive }) => {
+      scheduleATTWhenActive(isActive);
+    });
+
+    return () => {
+      cancelled = true;
+      if (attDelay) clearTimeout(attDelay);
+      void listenerPromise.then((listener) => listener.remove());
+    };
   }, []);
 
   const handleShare = async () => {
@@ -149,19 +183,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-theme-surface flex justify-center overflow-hidden">
       <div className="w-full max-w-md bg-theme-surface relative flex flex-col shadow-2xl overflow-hidden">
-        <AnimatePresence>
-          {ADS_ENABLED && showInterstitial && !Capacitor.isNativePlatform() && (
-            <motion.div
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -50 }}
-              className="absolute inset-0 z-[100]"
-            >
-              <InterstitialAdMock onClose={proceedToDetail} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         {ADS_ENABLED && BANNER_ADS_ENABLED && Capacitor.isNativePlatform() && <BannerAdNative />}
         {ADS_ENABLED && BANNER_ADS_ENABLED && !Capacitor.isNativePlatform() && (
           <AdBannerPlaceholder position="top" />

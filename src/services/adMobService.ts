@@ -29,11 +29,31 @@ export async function removeNativeBanner(): Promise<void> {
   }
 }
 
+const interstitialOptions = () => ({
+  adId: ADMOB_INTERSTITIAL_UNIT_ID,
+  isTesting: adMobUseTestingMode(),
+});
+
 /**
- * Loads and shows a full-screen interstitial; invokes `onFinished` at most once
- * (dismissed, failed to load, failed to show, or error). Omit when nothing must run after.
+ * Pré-carrega um intersticial em cache. Não exibe nada — seguro para chamar no arranque.
+ * Cumpre a regra da App Store de não mostrar ads sem ação do utilizador (Guideline 4 - Design).
  */
-export async function presentInterstitialAd(onFinished?: () => void): Promise<void> {
+export async function prepareInterstitialAd(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await ensureAdMobInitialized();
+    await AdMob.prepareInterstitial(interstitialOptions());
+  } catch (e) {
+    devLog.info('prepareInterstitial failed', e);
+  }
+}
+
+/**
+ * Exibe um intersticial **apenas em resposta a um gesto explícito do utilizador**.
+ * Faz prepare + show e invoca `onFinished` no máximo uma vez (dismissed, falha de load,
+ * falha de show ou erro). Não chamar em `useEffect` de arranque nem em navegação automática.
+ */
+export async function showInterstitialAd(onFinished?: () => void): Promise<void> {
   if (!Capacitor.isNativePlatform()) {
     onFinished?.();
     return;
@@ -45,11 +65,6 @@ export async function presentInterstitialAd(onFinished?: () => void): Promise<vo
     onFinished?.();
     return;
   }
-
-  const options = {
-    adId: ADMOB_INTERSTITIAL_UNIT_ID,
-    isTesting: adMobUseTestingMode(),
-  };
 
   let finished = false;
   const handles: { remove: () => Promise<void> }[] = [];
@@ -80,7 +95,7 @@ export async function presentInterstitialAd(onFinished?: () => void): Promise<vo
   );
 
   try {
-    await AdMob.prepareInterstitial(options);
+    await AdMob.prepareInterstitial(interstitialOptions());
     await AdMob.showInterstitial();
   } catch (e) {
     devLog.info('Interstitial prepare/show threw', e);

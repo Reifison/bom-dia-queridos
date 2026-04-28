@@ -50,7 +50,7 @@
 	<key>GADApplicationIdentifier</key>
 	<string>ca-app-pub-1257467824403671~2501640483</string>
 	<key>NSUserTrackingUsageDescription</key>
-	<string>Usamos este identificador para mostrar anúncios mais relevantes.</string>
+	<string>Usamos seus dados para fornecer anúncios personalizados e manter o aplicativo gratuito.</string>
 	<key>SKAdNetworkItems</key>
 	<array>
 		<dict>
