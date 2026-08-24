@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bookmark, Home } from 'lucide-react';
-import { AdBannerPlaceholder } from './components/ads/AdBannerPlaceholder';
-import { InterstitialAdMock } from './components/ads/InterstitialAdMock';
 import { SettingsNavButton } from './components/navigation/SettingsNavButton';
 import { ADS_ENABLED, SHOW_SETTINGS_NAV } from './constants/featureFlags';
 import { INITIAL_MESSAGES } from './constants/content';
@@ -11,11 +9,28 @@ import { HomeView } from './features/home/HomeView';
 import { useDailyGeneration } from './hooks/useDailyGeneration';
 import { devLog } from './lib/logger';
 import {
+  registerInterstitialShown,
+  registerMessageOpening,
+  shouldShowInterstitial,
+} from './lib/adCadence';
+import { composeShareImageFile } from './lib/shareImage';
+import {
   getTodayLocal,
   loadSessionPeriodDayMessages,
   saveSessionPeriodDayMessage,
 } from './lib/periodDayCache';
 import type { DailyMessage, Period, PeriodId } from './types/period';
+import { copyTextToClipboard, shareDailyMessage } from './services/shareDailyMessage';
+import {
+  hideHomeBanner,
+  initializeMobileAds,
+  preloadInterstitial,
+  preloadRewarded,
+  removeHomeBanner,
+  showHomeBanner,
+  showInterstitial,
+  showTwoRewardedAds,
+} from './services/mobileAds';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<'home' | 'detail'>('home');
@@ -25,13 +40,43 @@ export default function App() {
   const periodTodayMessagesRef = useRef(periodTodayMessages);
   periodTodayMessagesRef.current = periodTodayMessages;
 
-  const { generationsRemaining, isGenerating, generateForPeriod, autoGenerateForPeriod } =
-    useDailyGeneration();
+  const {
+    generationsRemaining,
+    isGenerating,
+    generateForPeriod,
+    autoGenerateForPeriod,
+    grantRewardedCredits,
+  } = useDailyGeneration();
 
-  const [showInterstitial, setShowInterstitial] = useState(false);
-  const [pendingPeriod, setPendingPeriod] = useState<Period | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [isUnlockingGenerations, setIsUnlockingGenerations] = useState(false);
+  const [isShowingInterstitial, setIsShowingInterstitial] = useState(false);
+
+  useEffect(() => {
+    if (!ADS_ENABLED) return;
+    let active = true;
+    void initializeMobileAds().then((result) => {
+      if (!active || !result.available || !result.canRequestAds) return;
+      void preloadInterstitial();
+      void preloadRewarded();
+    });
+    return () => {
+      active = false;
+      void removeHomeBanner();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!ADS_ENABLED) return;
+    if (currentView === 'home' && !isShowingInterstitial) {
+      void showHomeBanner();
+    } else {
+      void hideHomeBanner();
+    }
+  }, [currentView, isShowingInterstitial]);
 
   const goToDetail = (period: Period) => {
+    if (ADS_ENABLED) registerMessageOpening();
     setSelectedPeriod(period);
     const today = getTodayLocal();
     const hit = periodTodayMessagesRef.current[period.id];
@@ -39,25 +84,24 @@ export default function App() {
     setCurrentView('detail');
   };
 
-  const handleSelectPeriod = (period: Period) => {
-    if (ADS_ENABLED) {
-      setPendingPeriod(period);
-      setShowInterstitial(true);
-    } else {
-      goToDetail(period);
-    }
-  };
-
-  const proceedToDetail = () => {
-    setShowInterstitial(false);
-    if (pendingPeriod) {
-      goToDetail(pendingPeriod);
-      setPendingPeriod(null);
-    }
-  };
+  const handleSelectPeriod = (period: Period) => goToDetail(period);
 
   const handleBack = () => {
+    const willShowInterstitial = ADS_ENABLED && shouldShowInterstitial();
+    if (willShowInterstitial) setIsShowingInterstitial(true);
     setCurrentView('home');
+    if (willShowInterstitial) {
+      void (async () => {
+        await hideHomeBanner();
+        try {
+          if (await showInterstitial()) {
+            registerInterstitialShown();
+          }
+        } finally {
+          setIsShowingInterstitial(false);
+        }
+      })();
+    }
     setTimeout(() => {
       setSelectedPeriod(null);
       setCurrentMessage(null);
@@ -73,8 +117,34 @@ export default function App() {
     });
   }, []);
 
-  const handleGenerateNew = () => {
+  const handleGenerateNew = async () => {
     if (!selectedPeriod) return;
+    if ((generationsRemaining[selectedPeriod.id] ?? 0) <= 0) {
+      if (!ADS_ENABLED) {
+        alert('Suas gerações de hoje acabaram. Volte amanhã para receber uma nova.');
+        return;
+      }
+      const accepted = window.confirm(
+        'Assista a 2 anúncios premiados para liberar 2 novas gerações hoje. Deseja continuar?'
+      );
+      if (!accepted) return;
+
+      setIsUnlockingGenerations(true);
+      try {
+        const reward = await showTwoRewardedAds();
+        if (reward.granted) {
+          grantRewardedCredits(selectedPeriod.id);
+          alert('Tudo certo! Você ganhou 2 novas gerações para este período hoje.');
+        } else if (reward.results[0].reason === 'missing-ad-unit') {
+          alert('Os anúncios premiados ainda não estão disponíveis nesta plataforma.');
+        } else {
+          alert('Não foi possível carregar os dois anúncios agora. Tente novamente em instantes.');
+        }
+      } finally {
+        setIsUnlockingGenerations(false);
+      }
+      return;
+    }
     void generateForPeriod(selectedPeriod.id, (msg) => {
       setCurrentMessage(msg);
       persistPeriodDayMessage(selectedPeriod.id, msg);
@@ -99,43 +169,48 @@ export default function App() {
   }, [currentView, selectedPeriod?.id, autoGenerateForPeriod, persistPeriodDayMessage]);
 
   const handleShare = async () => {
-    if (!currentMessage || !selectedPeriod) return;
+    if (!currentMessage || !selectedPeriod || isGenerating || isSharing) return;
 
     const text = `${selectedPeriod.title} queridos! ✨\n\n${currentMessage.mainText}${currentMessage.quote ? `\n\n${currentMessage.quote}` : ''}`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'Mensagem do Dia',
-          text,
-        });
-      } catch (err) {
-        devLog.info('Share cancelled or failed');
+    setIsSharing(true);
+    try {
+      const file = await composeShareImageFile({
+        background: currentMessage.image,
+        title: `${selectedPeriod.title} QUERIDOS!`,
+        mainText: currentMessage.mainText,
+        quote: currentMessage.quote,
+        signature: 'App bom dia queridos',
+      }, `${selectedPeriod.id}-${getTodayLocal()}.jpg`);
+      const result = await shareDailyMessage(text, file, {
+        title: 'Mensagem do Dia',
+        dialogTitle: 'Compartilhar mensagem',
+      });
+      if (result === 'downloaded') {
+        alert('Imagem baixada e texto copiado para a área de transferência.');
+      } else if (result === 'copied') {
+        alert('O texto foi copiado para a área de transferência.');
       }
-    } else {
-      await navigator.clipboard.writeText(text);
-      alert('Texto copiado para a área de transferência!');
+    } catch (err) {
+      devLog.error('Unable to share daily message', err);
+      alert('Não foi possível preparar a imagem para compartilhar. Tente novamente.');
+    } finally {
+      setIsSharing(false);
     }
+  };
+
+  const handleCopyText = async () => {
+    if (!currentMessage || !selectedPeriod) return;
+    const text = `${selectedPeriod.title} queridos! ✨\n\n${currentMessage.mainText}${currentMessage.quote ? `\n\n${currentMessage.quote}` : ''}`;
+    if (await copyTextToClipboard(text)) {
+      alert('Texto copiado para a área de transferência!');
+      return;
+    }
+    alert('Não foi possível copiar o texto.');
   };
 
   return (
     <div className="min-h-screen bg-theme-surface flex justify-center overflow-hidden">
       <div className="w-full max-w-md bg-theme-surface relative flex flex-col shadow-2xl overflow-hidden">
-        <AnimatePresence>
-          {ADS_ENABLED && showInterstitial && (
-            <motion.div
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -50 }}
-              className="absolute inset-0 z-[100]"
-            >
-              <InterstitialAdMock onClose={proceedToDetail} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {ADS_ENABLED && <AdBannerPlaceholder position="top" />}
-
         <AnimatePresence mode="wait">
           {currentView === 'home' ? (
             <motion.div
@@ -144,7 +219,7 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
               transition={{ duration: 0.3 }}
-              className={ADS_ENABLED ? 'flex-1 overflow-y-auto pb-40' : 'flex-1 overflow-y-auto pb-24'}
+              className="flex-1 overflow-y-auto pb-40"
             >
               <HomeView onSelect={handleSelectPeriod} />
             </motion.div>
@@ -155,7 +230,7 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
               transition={{ duration: 0.3 }}
-              className={ADS_ENABLED ? 'flex-1 overflow-y-auto pb-40 bg-theme-surface' : 'flex-1 overflow-y-auto pb-24 bg-theme-surface'}
+              className="flex-1 overflow-y-auto pb-24 bg-theme-surface"
             >
               {selectedPeriod && currentMessage && (
                 <DetailView
@@ -163,8 +238,11 @@ export default function App() {
                   message={currentMessage}
                   onBack={handleBack}
                   onShare={handleShare}
+                  onCopyText={handleCopyText}
                   onGenerate={handleGenerateNew}
                   isGenerating={isGenerating}
+                  isSharing={isSharing}
+                  isUnlockingGenerations={isUnlockingGenerations}
                   generationsRemaining={generationsRemaining[selectedPeriod.id] ?? 0}
                 />
               )}
@@ -173,8 +251,6 @@ export default function App() {
         </AnimatePresence>
 
         <div className="absolute bottom-0 left-0 w-full z-50 flex flex-col">
-          {ADS_ENABLED && <AdBannerPlaceholder position="bottom" />}
-
           <div className="w-full h-20 flex justify-around items-center px-8 pb-2 bg-white/90 backdrop-blur-xl border-t border-gray-100 shadow-[0_-4px_24px_rgba(0,0,0,0.02)]">
             <button
               type="button"

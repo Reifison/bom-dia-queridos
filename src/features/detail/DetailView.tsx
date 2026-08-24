@@ -6,9 +6,12 @@ export interface DetailViewProps {
   period: Period;
   message: DailyMessage;
   onBack: () => void;
-  onShare: () => void;
-  onGenerate: () => void;
+  onShare: () => Promise<void>;
+  onCopyText: () => Promise<void>;
+  onGenerate: () => Promise<void>;
   isGenerating: boolean;
+  isSharing: boolean;
+  isUnlockingGenerations: boolean;
   generationsRemaining: number;
 }
 
@@ -17,8 +20,11 @@ export function DetailView({
   message,
   onBack,
   onShare,
+  onCopyText,
   onGenerate,
   isGenerating,
+  isSharing,
+  isUnlockingGenerations,
   generationsRemaining,
 }: DetailViewProps) {
   return (
@@ -80,28 +86,33 @@ export function DetailView({
         <button
           type="button"
           onClick={onShare}
-          className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-theme-action-share-bg text-theme-action-share-fg active:scale-95 transition-transform shadow-sm"
+          disabled={isGenerating || isSharing}
+          className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-theme-action-share-bg text-theme-action-share-fg active:scale-95 transition-transform shadow-sm disabled:opacity-60 disabled:cursor-wait"
         >
           <div className="flex gap-2">
             <Share2 size={20} />
             <Download size={20} />
           </div>
-          <span className="text-[10px] font-bold uppercase tracking-wider text-center">Compartilhar / Salvar</span>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-center">{isSharing ? 'Preparando imagem...' : 'Compartilhar / Salvar'}</span>
         </button>
 
         <button
           type="button"
           onClick={onGenerate}
-          disabled={generationsRemaining <= 0 || isGenerating}
+          disabled={isGenerating || isUnlockingGenerations}
           className={`flex flex-col items-center justify-center gap-2 p-4 rounded-2xl transition-transform shadow-sm ${
-            generationsRemaining > 0 && !isGenerating
+            !isGenerating && !isUnlockingGenerations
               ? 'bg-theme-action-generate-bg text-theme-action-generate-fg active:scale-95'
               : 'bg-theme-action-disabled-bg text-theme-action-disabled-fg'
           }`}
         >
           <RefreshCw size={20} className={isGenerating ? 'animate-spin' : ''} />
           <span className="text-[10px] font-bold uppercase tracking-wider text-center">
-            Gerar Nova ({generationsRemaining}/1 hoje)
+            {isUnlockingGenerations
+              ? 'Carregando anúncios...'
+              : generationsRemaining > 0
+                ? `Gerar Nova (${generationsRemaining} hoje)`
+                : 'Ver 2 anúncios e liberar 2'}
           </span>
         </button>
       </div>
@@ -109,7 +120,7 @@ export function DetailView({
       <div className="mt-6 flex justify-center mb-8">
         <button
           type="button"
-          onClick={onShare}
+          onClick={onCopyText}
           className="flex items-center gap-2 px-6 py-3 rounded-full bg-black/5 text-theme-on-surface-variant text-sm font-semibold hover:bg-black/10 transition-colors"
         >
           <Copy size={16} />

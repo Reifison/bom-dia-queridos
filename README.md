@@ -63,3 +63,99 @@ No Capacitor, `fetch('/api/...')` **sem** `VITE_API_ORIGIN` no build vira pedido
 ### Depois de alterar o front web
 
 Sempre que mudar o React/CSS, volte a correr **`npm run ios:sync`** (ou `npm run build && npx cap sync ios`) antes de testar no Xcode, **exceto** na Opção B, onde o conteúdo vem do servidor de dev.
+
+## Testar e gerar no Android
+
+O projeto inclui o projeto nativo Android em `android/`, gerado pelo Capacitor.
+O package ID é `com.bomdiaqueridos.app`.
+
+### Pré-requisitos
+
+- Android Studio com Android SDK Platform 36 e Build-Tools instalados;
+- JDK 21 configurado no `JAVA_HOME` (o Capacitor 8 compila com Java 21);
+- Node.js e dependências instaladas com `npm install`;
+- um emulador Android ou dispositivo físico com depuração USB ativada.
+
+Confirme o SDK e o Java no Android Studio em **Settings > Languages & Frameworks >
+Android SDK** e **Gradle > Gradle JDK**. No terminal, `java -version` deve mostrar
+Java 21. O wrapper usa Gradle 8.14.3; não é necessário instalar Gradle globalmente.
+
+### Sincronizar e abrir no Android Studio
+
+Após alterar React, CSS ou dependências Capacitor, gere o bundle web e copie-o para
+o projeto Android:
+
+```sh
+npm run android:sync
+npm run android:open
+```
+
+No Android Studio, selecione um emulador/dispositivo e execute a configuração
+`app` com **Run**. Os scripts disponíveis são `android:sync`, `android:open`,
+`android:run`, `android:build:debug` e `android:build:release`.
+
+Para gerar o APK debug diretamente:
+
+```sh
+npm run android:build:debug
+```
+
+O APK será gerado em `android/app/build/outputs/apk/debug/app-debug.apk`. A pasta
+`android/app/build` é gerada e não deve ser commitada.
+
+### API durante testes
+
+O bundle Android é estático e não inclui o servidor Node. A API Gemini deve estar
+rodando separadamente, e `VITE_API_ORIGIN` precisa ser definido antes de
+`android:sync`:
+
+```sh
+# terminal 1 — API
+npm run dev:api
+
+# terminal 2 — bundle Android no emulador
+VITE_API_ORIGIN=http://10.0.2.2:8787 npm run android:sync
+npm run android:open
+```
+
+`10.0.2.2` aponta do emulador Android para o `localhost` do computador. Em um
+dispositivo físico, use o IP da máquina na mesma rede Wi-Fi, por exemplo
+`VITE_API_ORIGIN=http://192.168.1.10:8787`. Para distribuição, use uma URL HTTPS
+pública, como `VITE_API_ORIGIN=https://api.exemplo.com`.
+
+Não deixe `VITE_API_ORIGIN` vazio no build nativo: sem ele, `fetch('/api/...')`
+tenta acessar `capacitor://localhost/api/...` e a geração da mensagem falha. A
+variável pode ficar no `.env.local` (ignorado pelo Git):
+
+```dotenv
+VITE_API_ORIGIN=http://10.0.2.2:8787
+```
+
+Depois de mudar a variável, rode `npm run android:sync` novamente para embuti-la
+no bundle. Para live reload, configure temporariamente `server.url` e
+`cleartext: true` em `capacitor.config.ts` com um endereço acessível pelo
+emulador/dispositivo e use `npm run dev`.
+
+### Release e Google Play
+
+O módulo Android ainda precisa de uma chave de assinatura de produção antes de
+ser publicado. Não commite o keystore nem senhas. Configure `signingConfigs.release`
+em configuração local/segura ou injete os valores pelo CI, usando variáveis como
+`ANDROID_KEYSTORE_PATH`, `ANDROID_KEY_ALIAS`, `ANDROID_KEYSTORE_PASSWORD` e
+`ANDROID_KEY_PASSWORD`.
+
+Depois de configurar a assinatura e atualizar `versionCode`/`versionName` em
+`android/app/build.gradle`, gere o Android App Bundle:
+
+```sh
+npm run android:build:release
+```
+
+O AAB ficará em `android/app/build/outputs/bundle/release/`. Antes de publicar,
+teste a variante release em um dispositivo, valide a URL HTTPS da API e configure
+no CI Node.js, JDK 21, SDK 36 e os segredos da assinatura.
+
+Para assinatura local, copie `android/keystore.properties.example` para
+`android/keystore.properties` e informe os valores. No CI, configure os segredos
+`ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` e
+`ANDROID_KEY_PASSWORD`; o Gradle usa essas variáveis sem gravá-las no repositório.

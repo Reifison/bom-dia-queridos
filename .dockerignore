@@ -1,0 +1,24 @@
+node_modules
+dist
+.git
+.env*
+android
+ios
+coverage
+store-assets
+*** Add File: /Users/magalu/Desktop/apps/bom-dia-queridos/docker-compose.production.yml
+services:
+  bom-dia-queridos:
+    build:
+      context: .
+      args:
+        VITE_API_ORIGIN: ${VITE_API_ORIGIN}
+    container_name: bom-dia-queridos
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+    ports:
+      - "127.0.0.1:8787:8787"
+    restart: unless-stopped

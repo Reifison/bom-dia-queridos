@@ -18,12 +18,20 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
+      watch: {
+        ignored: ['**/android/**', '**/ios/**'],
+      },
       proxy: {
         '/api': {
           target: `http://127.0.0.1:${API_PORT}`,
           changeOrigin: true,
         },
       },
+    },
+    // Capacitor copies a production index.html into the native folders. Limit
+    // dependency discovery to this source entry so Vite never scans that copy.
+    optimizeDeps: {
+      entries: ['index.html'],
     },
   };
 });

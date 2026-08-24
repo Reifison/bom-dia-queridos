@@ -1,7 +1,7 @@
 import { FEATURE_FLAGS } from './featureFlags';
 import type { DailyMessage, Period, PeriodId } from '../types/period';
 
-/** Unsplash thumbnails: fm=jpg evita AVIF/WebP no WKWebView (iOS/Capacitor). */
+/** Unsplash thumbnails: fm=jpg evita AVIF/WebP em WebViews nativos (Capacitor). */
 function us(id: string): string {
   return `https://images.unsplash.com/${id}?q=80&w=640&fit=crop&fm=jpg`;
 }
