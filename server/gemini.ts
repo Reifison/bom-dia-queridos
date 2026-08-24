@@ -84,7 +84,7 @@ export async function generateDailyMessage(period: PeriodId): Promise<{ mainText
     - quote: Uma citação curta de um autor ou filme (opcional, use apenas se agregar valor).`;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-3.1-flash-lite',
     contents: prompt,
     config: {
       responseMimeType: 'application/json',
@@ -124,9 +124,9 @@ export async function generateDailyImage(period: PeriodId): Promise<string> {
 
   const attempts: { label: string; params: GenerateContentParameters }[] = [
     {
-      label: 'gemini-3.1-flash-image-preview + modalities + aspect',
+      label: 'gemini-3.1-flash-image + modalities + aspect',
       params: {
-        model: 'gemini-3.1-flash-image-preview',
+        model: 'gemini-3.1-flash-image',
         contents: text,
         config: {
           responseModalities: [Modality.TEXT, Modality.IMAGE],
@@ -135,9 +135,9 @@ export async function generateDailyImage(period: PeriodId): Promise<string> {
       },
     },
     {
-      label: 'gemini-3.1-flash-image-preview (sem config)',
+      label: 'gemini-3.1-flash-image (sem config)',
       params: {
-        model: 'gemini-3.1-flash-image-preview',
+        model: 'gemini-3.1-flash-image',
         contents: text,
       },
     },
