@@ -1,15 +1,16 @@
 import { ApiError, GoogleGenAI, Modality, Type } from '@google/genai';
-import type { GenerateContentParameters, GenerateContentResponse } from '@google/genai';
+import type { GenerateContentResponse } from '@google/genai';
 import sharp from 'sharp';
 
 export type PeriodId = 'morning' | 'afternoon' | 'night';
+export type AppLocale = 'pt' | 'en';
 
 function getClient() {
-  const key = process.env.GEMINI_API_KEY;
+  const key = process.env.GEMINI_API_KEY?.trim();
   if (!key) {
     throw new Error('GEMINI_API_KEY_MISSING');
   }
-  return new GoogleGenAI({ apiKey: key });
+  return new GoogleGenAI({ apiKey: key, httpOptions: { timeout: 40_000, retryOptions: { attempts: 1 } } });
 }
 
 /** WKWebView (Capacitor/iOS) costuma falhar com AVIF; converter para JPEG no servidor. */
@@ -17,25 +18,12 @@ async function inlineDataToIosSafeDataUrl(
   mimeType: string | undefined,
   base64: string
 ): Promise<string> {
-  const mime = (mimeType || 'image/png').toLowerCase();
-  const transcode =
-    mime === 'image/avif' ||
-    mime === 'image/webp' ||
-    mime === 'image/heif' ||
-    mime === 'image/heic';
-
-  if (!transcode) {
-    return `data:${mime};base64,${base64}`;
-  }
-
-  try {
-    const input = Buffer.from(base64, 'base64');
-    const jpeg = await sharp(input).jpeg({ quality: 88, mozjpeg: true }).toBuffer();
-    return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
-  } catch (err) {
-    console.error('[gemini] image transcode failed, returning original:', err);
-    return `data:${mime};base64,${base64}`;
-  }
+  if (mimeType && !mimeType.startsWith('image/')) throw new Error('NO_IMAGE_IN_RESPONSE');
+  const input = Buffer.from(base64, 'base64');
+  const jpeg = await sharp(input).rotate()
+    .resize({ width: 1200, height: 1600, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+  return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
 }
 
 function logImageResponseShape(label: string, response: GenerateContentResponse) {
@@ -61,30 +49,38 @@ async function firstInlineAsDataUrl(
 ): Promise<string | null> {
   const parts = response.candidates?.[0]?.content?.parts || [];
   for (const part of parts) {
-    if (part.inlineData?.data) {
+    if (!part.thought && part.inlineData?.data) {
       return await inlineDataToIosSafeDataUrl(part.inlineData.mimeType, part.inlineData.data);
     }
   }
   return null;
 }
 
-export async function generateDailyMessage(period: PeriodId): Promise<{ mainText: string; quote?: string }> {
-  const ai = getClient();
-
-  const periodNames = {
-    morning: 'manhã',
-    afternoon: 'tarde',
-    night: 'noite',
-  };
-
-  const prompt = `Crie uma mensagem motivacional curta e acolhedora para o período da ${periodNames[period]}.
-    A mensagem deve ser otimista, fácil de ler e perfeita para compartilhar no WhatsApp.
+export function buildDailyMessagePrompt(period: PeriodId, locale: AppLocale = 'pt'): string {
+  if (locale === 'en') {
+    return `Write a short, warm, encouraging message for the ${period}.
+      Write every user-facing field in natural English. Keep it optimistic, easy to read, and suitable for sharing on WhatsApp.
+      Return JSON with:
+      - mainText: The main message, up to 160 characters (required).
+      - quote: A short quote, up to 120 characters (optional; include one only when its authorship is certain, and keep it in English).`;
+  }
+  const periodNames = { morning: 'manhã', afternoon: 'tarde', night: 'noite' };
+  return `Crie uma mensagem motivacional curta e acolhedora para o período da ${periodNames[period]}.
+    Escreva todos os campos voltados ao usuário em português natural do Brasil. A mensagem deve ser otimista, fácil de ler e perfeita para compartilhar no WhatsApp.
     Retorne um JSON com:
-    - mainText: A frase principal (obrigatório).
-    - quote: Uma citação curta de um autor ou filme (opcional, use apenas se agregar valor).`;
+    - mainText: A frase principal, com até 160 caracteres (obrigatório).
+    - quote: Uma citação curta, com até 120 caracteres (opcional; inclua somente se tiver certeza da autoria e mantenha-a em português).`;
+}
+
+export async function generateDailyMessage(
+  period: PeriodId,
+  locale: AppLocale = 'pt',
+): Promise<{ mainText: string; quote?: string }> {
+  const ai = getClient();
+  const prompt = buildDailyMessagePrompt(period, locale);
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite',
+    model: process.env.GEMINI_TEXT_MODEL?.trim() || 'gemini-3.1-flash-lite',
     contents: prompt,
     config: {
       responseMimeType: 'application/json',
@@ -102,11 +98,18 @@ export async function generateDailyMessage(period: PeriodId): Promise<{ mainText
   if (!response.text) {
     throw new Error('EMPTY_TEXT_RESPONSE');
   }
-  return JSON.parse(response.text.trim()) as { mainText: string; quote?: string };
+  let data: { mainText?: unknown; quote?: unknown };
+  try { data = JSON.parse(response.text.trim()); }
+  catch { throw new Error('INVALID_TEXT_RESPONSE'); }
+  if (!data || typeof data.mainText !== 'string' || !data.mainText.trim() ||
+      (data.quote !== undefined && typeof data.quote !== 'string')) {
+    throw new Error('INVALID_TEXT_RESPONSE');
+  }
+  return { mainText: data.mainText.trim(), ...(typeof data.quote === 'string' ? { quote: data.quote.trim() } : {}) };
 }
 
 /**
- * Várias tentativas: quotas/modelos variam por chave e região; a API também pode devolver 200 sem inlineData (safety).
+ * Only retry against an explicitly configured fallback; retired models must not be used silently.
  */
 export async function generateDailyImage(period: PeriodId): Promise<string> {
   const ai = getClient();
@@ -122,67 +125,37 @@ export async function generateDailyImage(period: PeriodId): Promise<string> {
 
   const text = periodPrompts[period];
 
-  const attempts: { label: string; params: GenerateContentParameters }[] = [
-    {
-      label: 'gemini-3.1-flash-image + modalities + aspect',
-      params: {
-        model: 'gemini-3.1-flash-image',
-        contents: text,
-        config: {
-          responseModalities: [Modality.TEXT, Modality.IMAGE],
-          imageConfig: { aspectRatio: '3:4' },
-        },
-      },
-    },
-    {
-      label: 'gemini-3.1-flash-image (sem config)',
-      params: {
-        model: 'gemini-3.1-flash-image',
-        contents: text,
-      },
-    },
-    {
-      label: 'gemini-2.5-flash-image + aspect',
-      params: {
-        model: 'gemini-2.5-flash-image',
-        contents: text,
-        config: {
-          imageConfig: { aspectRatio: '3:4' },
-        },
-      },
-    },
-    {
-      label: 'gemini-2.5-flash-image + parts',
-      params: {
-        model: 'gemini-2.5-flash-image',
-        contents: { parts: [{ text }] },
-      },
-    },
-  ];
+  const models = [...new Set([
+    process.env.GEMINI_IMAGE_MODEL?.trim() || 'gemini-3.1-flash-image',
+    process.env.GEMINI_IMAGE_FALLBACK_MODEL?.trim(),
+  ].filter((model): model is string => !!model))];
 
   let lastError: unknown = new Error('NO_IMAGE_ATTEMPTS');
 
-  for (const { label, params } of attempts) {
+  for (const model of models) {
     try {
-      const response = await ai.models.generateContent(params);
-      logImageResponseShape(label, response);
+      const response = await ai.models.generateContent({
+        model,
+        contents: text,
+        config: { responseModalities: [Modality.TEXT, Modality.IMAGE], imageConfig: { aspectRatio: '3:4' } },
+      });
       const dataUrl = await firstInlineAsDataUrl(response);
       if (dataUrl) {
         return dataUrl;
       }
-      lastError = new Error(`NO_IMAGE_IN_RESPONSE:${label}`);
-      console.error('[gemini] nenhum inlineData nesta tentativa, a tentar próximo modelo/config.');
+      logImageResponseShape(model, response);
+      lastError = new Error('NO_IMAGE_IN_RESPONSE');
     } catch (e) {
       lastError = e;
       if (e instanceof ApiError) {
-        console.error(`[gemini] ApiError [${label}]:`, e.status, e.message.slice(0, 500));
-        if (e.status === 429) {
+        console.error('[gemini]', model, formatGeminiErrorForLog(e));
+        if ([401, 403, 429].includes(e.status)) {
           throw e;
         }
       } else if (e instanceof Error) {
-        console.error(`[gemini] erro [${label}]:`, e.message.slice(0, 500));
+        console.error('[gemini]', model, formatGeminiErrorForLog(e));
       } else {
-        console.error(`[gemini] erro [${label}]:`, String(e));
+        console.error('[gemini]', model, formatGeminiErrorForLog(e));
       }
     }
   }
@@ -195,11 +168,15 @@ export async function generateDailyImage(period: PeriodId): Promise<string> {
 
 /** Para o Express: mensagem segura no log (sem PII). */
 export function formatGeminiErrorForLog(err: unknown): string {
+  const redact = (text: string) => {
+    const key = process.env.GEMINI_API_KEY?.trim();
+    return (key ? text.split(key).join('[REDACTED]') : text).slice(0, 500);
+  };
   if (err instanceof ApiError) {
-    return `ApiError ${err.status}: ${err.message}`.slice(0, 500);
+    return redact(`ApiError ${err.status}: ${err.message}`);
   }
   if (err instanceof Error) {
-    return err.message.slice(0, 500);
+    return redact(err.message);
   }
-  return String(err).slice(0, 500);
+  return redact(String(err));
 }

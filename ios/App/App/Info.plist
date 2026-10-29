@@ -6,8 +6,10 @@
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array><string>en</string><string>pt</string></array>
 	<key>CFBundleDisplayName</key>
-        <string>Bom dia queridos</string>
+        <string>Good Morning, Dear Ones</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -31,12 +33,37 @@
 			<string>cstr6suwn9.skadnetwork</string>
 		</dict>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>Your permission allows advertising partners to use device data to measure ads across other companies’ apps and websites. You can continue using the app if you decline.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose a photo for your message background. Your photo stays on this device.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save your message image to your photo library when you choose this option.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access lets you prepare a photo for your message if you choose this feature.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
-	<key>UIMainStoryboardFile</key>
-	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>armv7</string>

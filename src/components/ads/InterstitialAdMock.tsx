@@ -1,3 +1,4 @@
+import { t } from '../../lib/locale';
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 
@@ -16,7 +17,7 @@ export function InterstitialAdMock({ onClose }: { onClose: () => void }) {
       <div className="absolute top-12 right-6">
         {timeLeft > 0 ? (
           <div className="px-3 py-1 bg-white/20 rounded-full text-xs font-bold">
-            Anúncio em {timeLeft}s
+            {t("Anúncio em")} {timeLeft}s
           </div>
         ) : (
           <button
@@ -32,11 +33,9 @@ export function InterstitialAdMock({ onClose }: { onClose: () => void }) {
         <span className="font-bold text-3xl">Ad</span>
       </div>
       <p className="text-blue-400 text-xs uppercase tracking-widest mb-2 font-bold">AdMob Interstitial</p>
-      <h2 className="text-2xl font-bold mb-4 text-center">Anúncio de Tela Cheia</h2>
+      <h2 className="text-2xl font-bold mb-4 text-center">{t("Anúncio de Tela Cheia")}</h2>
       <p className="text-center text-gray-400 max-w-xs text-sm leading-relaxed">
-        Este é um placeholder. Aqui o SDK do AdMob exibirá o anúncio em vídeo ou tela cheia antes de liberar o
-        acesso à mensagem.
-      </p>
+        {t("Este é um placeholder. Aqui o SDK do AdMob exibirá o anúncio em vídeo ou tela cheia antes de liberar o acesso à mensagem.")}</p>
     </div>
   );
 }

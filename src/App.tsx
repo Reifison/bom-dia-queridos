@@ -1,274 +1,250 @@
+import { t } from './lib/locale';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Bookmark, Home } from 'lucide-react';
-import { SettingsNavButton } from './components/navigation/SettingsNavButton';
-import { ADS_ENABLED, SHOW_SETTINGS_NAV } from './constants/featureFlags';
-import { INITIAL_MESSAGES } from './constants/content';
+import { Home } from 'lucide-react';
+import { ADS_ENABLED } from './constants/featureFlags';
 import { DetailView } from './features/detail/DetailView';
 import { HomeView } from './features/home/HomeView';
-import { useDailyGeneration } from './hooks/useDailyGeneration';
-import { devLog } from './lib/logger';
-import {
-  registerInterstitialShown,
-  registerMessageOpening,
-  shouldShowInterstitial,
-} from './lib/adCadence';
-import { composeShareImageFile } from './lib/shareImage';
-import {
-  getTodayLocal,
-  loadSessionPeriodDayMessages,
-  saveSessionPeriodDayMessage,
-} from './lib/periodDayCache';
-import type { DailyMessage, Period, PeriodId } from './types/period';
+import { useLocalDay } from './hooks/useLocalDay';
+import { useNetworkStatus } from './hooks/useNetworkStatus';
+import { useMessageArt } from './hooks/useMessageArt';
+import { registerInterstitialShown, registerContentAction, shouldShowInterstitial } from './lib/adCadence';
+import { createDailyContentFlow, type ContentBusyPhase } from './lib/dailyContentFlow';
+import { loadDailyQuota, saveDailyQuota } from './lib/dailyGeneration';
+import { getOfflineDailyMessage } from './lib/offlineDailyContent';
+import { addGeneratedBankImage, selectBankImage, selectBankMessage, type BankSelection } from './lib/personalImageBank';
+import { getTodayLocal, loadPeriodDayMessages, savePeriodDayMessage, type PeriodDayEntry } from './lib/periodDayCache';
+import { messageGreeting } from './lib/messageGreeting';
+import { isOfflineReadyMessage, type DailyMessage, type Period, type PeriodId } from './types/period';
+import { generateFirebaseImage, getFirebaseAiAvailability } from './services/firebaseImageService';
+import { pickPersonalPhoto, prepareImageForBank } from './services/personalPhotoService';
 import { copyTextToClipboard, shareDailyMessage } from './services/shareDailyMessage';
-import {
-  hideHomeBanner,
-  initializeMobileAds,
-  preloadInterstitial,
-  preloadRewarded,
-  removeHomeBanner,
-  showHomeBanner,
-  showInterstitial,
-  showTwoRewardedAds,
-} from './services/mobileAds';
+import { hideHomeBanner, initializeMobileAds, isInterstitialReady, isNativeAdsPlatform, preloadInterstitial, removeHomeBanner, showAdPrivacyOptions, showHomeBanner, showInterstitial } from './services/mobileAds';
+
+const PERIOD_IDS: PeriodId[] = ['morning', 'afternoon', 'night'];
+
+function cachedMessage(entry: PeriodDayEntry | undefined, day: string): DailyMessage | undefined {
+  return entry?.day === day && isOfflineReadyMessage(entry.message) ? entry.message : undefined;
+}
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<'home' | 'detail'>('home');
+  const today = useLocalDay();
+  const online = useNetworkStatus();
   const [selectedPeriod, setSelectedPeriod] = useState<Period | null>(null);
-  const [currentMessage, setCurrentMessage] = useState<DailyMessage | null>(null);
-  const [periodTodayMessages, setPeriodTodayMessages] = useState(() => loadSessionPeriodDayMessages());
-  const periodTodayMessagesRef = useRef(periodTodayMessages);
-  periodTodayMessagesRef.current = periodTodayMessages;
-
-  const {
-    generationsRemaining,
-    isGenerating,
-    generateForPeriod,
-    autoGenerateForPeriod,
-    grantRewardedCredits,
-  } = useDailyGeneration();
-
+  const selectedRef = useRef(selectedPeriod);
+  const onlineRef = useRef(online);
+  onlineRef.current = online;
+  const [messages, setMessages] = useState<Partial<Record<PeriodId, PeriodDayEntry>>>({});
+  const messagesRef = useRef(messages);
+  const [cacheReadyDay, setCacheReadyDay] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState(false);
-  const [isUnlockingGenerations, setIsUnlockingGenerations] = useState(false);
-  const [isShowingInterstitial, setIsShowingInterstitial] = useState(false);
+  const shareLock = useRef(false);
+  const [busyPhase, setBusyPhase] = useState<ContentBusyPhase>(null);
+  const busyRef = useRef<ContentBusyPhase>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const storeMessage = useCallback((message: DailyMessage, day: string) => {
+    const next = { ...messagesRef.current, [message.periodId]: { day, message } };
+    messagesRef.current = next;
+    setMessages(next);
+    void savePeriodDayMessage(message.periodId, day, message);
+  }, []);
+
+  const beforeContentAction = useCallback(async (isCurrent: () => boolean) => {
+    if (!isCurrent() || !ADS_ENABLED || !onlineRef.current || !isNativeAdsPlatform()) return;
+    registerContentAction();
+    if (!shouldShowInterstitial()) return;
+    if (!isInterstitialReady()) { void preloadInterstitial(); return; }
+    await hideHomeBanner();
+    if (!isCurrent()) return;
+    if (await showInterstitial()) registerInterstitialShown();
+  }, []);
+
+  const [flow] = useState(() => createDailyContentFlow({
+    currentDay: getTodayLocal,
+    isCurrent: (period, day) => selectedRef.current?.id === period && getTodayLocal() === day,
+    readMessage: (period, day) => cachedMessage(messagesRef.current[period], day) ?? getOfflineDailyMessage(period, day),
+    writeMessage: storeMessage,
+    selectImage: (period, day, excludeImage) => selectBankImage(period, day, { excludeImage }),
+    selectText: (period, day, excludeText) => selectBankMessage(period, day, { excludeText }),
+    generateAi: generateFirebaseImage,
+    prepareAi: prepareImageForBank,
+    saveAi: addGeneratedBankImage,
+    pickPhoto: pickPersonalPhoto,
+    aiAvailable: () => onlineRef.current && getFirebaseAiAvailability().available,
+    readQuota: loadDailyQuota,
+    writeQuota: saveDailyQuota,
+    beforeAction: beforeContentAction,
+    onBusy: (phase) => { busyRef.current = phase; setBusyPhase(phase); },
+    onError: setActionError,
+  }));
+
+  const currentMessage = selectedPeriod
+    ? cachedMessage(messages[selectedPeriod.id], today) ?? getOfflineDailyMessage(selectedPeriod.id, today)
+    : null;
+  const aiAvailability = getFirebaseAiAvailability();
+  const recoverArtwork = useCallback((original: DailyMessage, replacement: BankSelection, day: string) => {
+    if (day !== getTodayLocal() || selectedRef.current?.id !== original.periodId) return;
+    const latest = cachedMessage(messagesRef.current[original.periodId], day);
+    if (latest && (latest.image !== original.image || latest.mainText !== original.mainText ||
+      latest.textPosition?.x !== original.textPosition?.x || latest.textPosition?.y !== original.textPosition?.y)) return;
+    storeMessage({ ...original, image: replacement.image, bankImageId: replacement.imageId, source: replacement.source, offline: undefined }, day);
+    setActionError(t('Usamos outra imagem do banco para preparar sua mensagem.'));
+  }, [storeMessage]);
+  const art = useMessageArt(currentMessage, selectedPeriod?.id, recoverArtwork);
 
   useEffect(() => {
-    if (!ADS_ENABLED) return;
+    let active = true;
+    flow.invalidate();
+    setActionError(null);
+    void (async () => {
+      const stored = await loadPeriodDayMessages(today);
+      if (!active) return;
+      const prepared = await Promise.all(PERIOD_IDS.map(async (id) => {
+        let message = cachedMessage(messagesRef.current[id], today) ?? cachedMessage(stored[id], today);
+        if (message) {
+          // Migrate existing AI artwork into the durable bank before tomorrow's
+          // daily cache replaces it. Personal photos are deliberately excluded.
+          if (message.source === 'firebase' && !message.bankImageId) {
+            try {
+              const saved = await addGeneratedBankImage(id, message.image, today);
+              message = { ...message, bankImageId: saved.imageId };
+            } catch { /* The existing daily image remains usable. */ }
+          }
+          return { id, message };
+        }
+        const previous = messagesRef.current[id]?.message;
+        const image = await selectBankImage(id, today, { excludeImage: previous?.bankImageId ?? previous?.image });
+        const mainText = await selectBankMessage(id, today, { excludeText: previous?.mainText });
+        return { id, message: { periodId: id, image: image.image, bankImageId: image.imageId, source: image.source, mainText, generationFlow: { day: today, manualBankRefreshes: 0 } } satisfies DailyMessage };
+      }));
+      if (!active || getTodayLocal() !== today) return;
+      const next: Partial<Record<PeriodId, PeriodDayEntry>> = {};
+      for (const { id, message } of prepared) {
+        const latest = cachedMessage(messagesRef.current[id], today);
+        const committed = latest ?? message;
+        next[id] = { day: today, message: committed };
+        void savePeriodDayMessage(id, today, committed);
+      }
+      messagesRef.current = next;
+      setMessages(next);
+      setCacheReadyDay(today);
+    })().catch(() => {
+      if (!active) return;
+      // A corrupt/unavailable bank must never take away the bundled greeting.
+      const next = Object.fromEntries(PERIOD_IDS.map((id) => [id, { day: today, message: getOfflineDailyMessage(id, today) }]));
+      messagesRef.current = next;
+      setMessages(next);
+      setCacheReadyDay(today);
+    });
+    return () => { active = false; };
+  }, [today, flow]);
+
+  useEffect(() => {
+    if (!ADS_ENABLED || !online) return;
     let active = true;
     void initializeMobileAds().then((result) => {
-      if (!active || !result.available || !result.canRequestAds) return;
-      void preloadInterstitial();
-      void preloadRewarded();
+      if (active && result.available && result.canRequestAds) void preloadInterstitial();
     });
-    return () => {
-      active = false;
-      void removeHomeBanner();
-    };
-  }, []);
+    return () => { active = false; };
+  }, [online]);
 
   useEffect(() => {
     if (!ADS_ENABLED) return;
-    if (currentView === 'home' && !isShowingInterstitial) {
-      void showHomeBanner();
-    } else {
-      void hideHomeBanner();
-    }
-  }, [currentView, isShowingInterstitial]);
+    if (!selectedPeriod && !busyPhase && online) void showHomeBanner();
+    else void hideHomeBanner();
+  }, [selectedPeriod?.id, busyPhase, online]);
+  useEffect(() => () => { flow.invalidate(); void removeHomeBanner(); }, [flow]);
 
-  const goToDetail = (period: Period) => {
-    if (ADS_ENABLED) registerMessageOpening();
+  const selectPeriod = (period: Period) => {
+    flow.invalidate();
+    selectedRef.current = period;
     setSelectedPeriod(period);
-    const today = getTodayLocal();
-    const hit = periodTodayMessagesRef.current[period.id];
-    setCurrentMessage(hit?.day === today ? hit.message : INITIAL_MESSAGES[period.id]);
-    setCurrentView('detail');
+    setActionError(null);
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    if (ADS_ENABLED && online && isNativeAdsPlatform()) registerContentAction();
   };
 
-  const handleSelectPeriod = (period: Period) => goToDetail(period);
-
-  const handleBack = () => {
-    const willShowInterstitial = ADS_ENABLED && shouldShowInterstitial();
-    if (willShowInterstitial) setIsShowingInterstitial(true);
-    setCurrentView('home');
-    if (willShowInterstitial) {
-      void (async () => {
-        await hideHomeBanner();
-        try {
-          if (await showInterstitial()) {
-            registerInterstitialShown();
-          }
-        } finally {
-          setIsShowingInterstitial(false);
-        }
-      })();
-    }
-    setTimeout(() => {
-      setSelectedPeriod(null);
-      setCurrentMessage(null);
-    }, 300);
+  const goHome = () => {
+    flow.invalidate();
+    selectedRef.current = null;
+    setSelectedPeriod(null);
+    setActionError(null);
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   };
 
-  const persistPeriodDayMessage = useCallback((periodId: PeriodId, msg: DailyMessage) => {
-    const today = getTodayLocal();
-    setPeriodTodayMessages((prev) => {
-      const next = { ...prev, [periodId]: { day: today, message: msg } };
-      saveSessionPeriodDayMessage(periodId, today, msg);
-      return next;
-    });
-  }, []);
-
-  const handleGenerateNew = async () => {
-    if (!selectedPeriod) return;
-    if ((generationsRemaining[selectedPeriod.id] ?? 0) <= 0) {
-      if (!ADS_ENABLED) {
-        alert('Suas gerações de hoje acabaram. Volte amanhã para receber uma nova.');
-        return;
-      }
-      const accepted = window.confirm(
-        'Assista a 2 anúncios premiados para liberar 2 novas gerações hoje. Deseja continuar?'
-      );
-      if (!accepted) return;
-
-      setIsUnlockingGenerations(true);
-      try {
-        const reward = await showTwoRewardedAds();
-        if (reward.granted) {
-          grantRewardedCredits(selectedPeriod.id);
-          alert('Tudo certo! Você ganhou 2 novas gerações para este período hoje.');
-        } else if (reward.results[0].reason === 'missing-ad-unit') {
-          alert('Os anúncios premiados ainda não estão disponíveis nesta plataforma.');
-        } else {
-          alert('Não foi possível carregar os dois anúncios agora. Tente novamente em instantes.');
-        }
-      } finally {
-        setIsUnlockingGenerations(false);
-      }
-      return;
-    }
-    void generateForPeriod(selectedPeriod.id, (msg) => {
-      setCurrentMessage(msg);
-      persistPeriodDayMessage(selectedPeriod.id, msg);
-    });
+  const generateNext = async () => {
+    const period = selectedRef.current;
+    if (!shareLock.current && period && cacheReadyDay === getTodayLocal()) await flow.generate(period.id, getTodayLocal());
+  };
+  const useMyPhoto = async () => {
+    const period = selectedRef.current;
+    if (!shareLock.current && period && cacheReadyDay === getTodayLocal()) await flow.usePersonalPhoto(period.id, getTodayLocal());
   };
 
-  useEffect(() => {
-    if (currentView !== 'detail' || !selectedPeriod) return;
-    const pid = selectedPeriod.id;
-    const today = getTodayLocal();
-    if (periodTodayMessagesRef.current[pid]?.day === today) return;
+  const movePersonalText = (textPosition?: { x: number; y: number }) => {
+    const period = selectedRef.current;
+    const day = getTodayLocal();
+    if (!period || shareLock.current || busyRef.current || cacheReadyDay !== day) return;
+    const message = cachedMessage(messagesRef.current[period.id], day);
+    if (message?.source !== 'personal') return;
+    storeMessage({ ...message, textPosition }, day);
+  };
 
-    let cancelled = false;
-    void autoGenerateForPeriod(pid, (msg) => {
-      if (cancelled) return;
-      setCurrentMessage(msg);
-      persistPeriodDayMessage(pid, msg);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentView, selectedPeriod?.id, autoGenerateForPeriod, persistPeriodDayMessage]);
-
-  const handleShare = async () => {
-    if (!currentMessage || !selectedPeriod || isGenerating || isSharing) return;
-
-    const text = `${selectedPeriod.title} queridos! ✨\n\n${currentMessage.mainText}${currentMessage.quote ? `\n\n${currentMessage.quote}` : ''}`;
+  const shareMessage = async () => {
+    if (!currentMessage || !selectedPeriod || shareLock.current || busyRef.current) return;
+    const requestPeriod = selectedPeriod.id;
+    const requestDay = today;
+    const isCurrent = () => selectedRef.current?.id === requestPeriod && getTodayLocal() === requestDay;
+    shareLock.current = true;
     setIsSharing(true);
     try {
-      const file = await composeShareImageFile({
-        background: currentMessage.image,
-        title: `${selectedPeriod.title} QUERIDOS!`,
-        mainText: currentMessage.mainText,
-        quote: currentMessage.quote,
-        signature: 'App bom dia queridos',
-      }, `${selectedPeriod.id}-${getTodayLocal()}.jpg`);
-      const result = await shareDailyMessage(text, file, {
-        title: 'Mensagem do Dia',
-        dialogTitle: 'Compartilhar mensagem',
-      });
-      if (result === 'downloaded') {
-        alert('Imagem baixada e texto copiado para a área de transferência.');
-      } else if (result === 'copied') {
-        alert('O texto foi copiado para a área de transferência.');
-      }
-    } catch (err) {
-      devLog.error('Unable to share daily message', err);
-      alert('Não foi possível preparar a imagem para compartilhar. Tente novamente.');
-    } finally {
-      setIsSharing(false);
-    }
+      const blob = await art.ensureBlob();
+      const file = new File([blob], `${selectedPeriod.id}-${today}.jpg`, { type: blob.type });
+      try { await beforeContentAction(isCurrent); } catch { /* Sharing continues if the ad fails. */ }
+      if (!isCurrent()) return;
+      const result = await shareDailyMessage(file, { dialogTitle: t('Compartilhar mensagem') });
+      if (result === 'downloaded') alert(t('Imagem baixada. Use Copiar texto se quiser copiar a mensagem.'));
+    } catch {
+      alert(t('Não foi possível preparar a imagem para compartilhar. Tente novamente.'));
+    } finally { shareLock.current = false; setIsSharing(false); }
   };
 
-  const handleCopyText = async () => {
+  const copyText = async () => {
     if (!currentMessage || !selectedPeriod) return;
-    const text = `${selectedPeriod.title} queridos! ✨\n\n${currentMessage.mainText}${currentMessage.quote ? `\n\n${currentMessage.quote}` : ''}`;
-    if (await copyTextToClipboard(text)) {
-      alert('Texto copiado para a área de transferência!');
-      return;
-    }
-    alert('Não foi possível copiar o texto.');
+    const text = `${messageGreeting(selectedPeriod.id)} ✨\n\n${currentMessage.mainText}${currentMessage.quote ? `\n\n${currentMessage.quote}` : ''}`;
+    alert(await copyTextToClipboard(text) ? t('Texto copiado para a área de transferência!') : t('Não foi possível copiar o texto.'));
   };
 
   return (
-    <div className="min-h-screen bg-theme-surface flex justify-center overflow-hidden">
-      <div className="w-full max-w-md bg-theme-surface relative flex flex-col shadow-2xl overflow-hidden">
+    <div className="app-viewport bg-theme-surface">
+      <div className="app-shell bg-theme-surface">
         <AnimatePresence mode="wait">
-          {currentView === 'home' ? (
-            <motion.div
-              key="home"
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              transition={{ duration: 0.3 }}
-              className="flex-1 overflow-y-auto pb-40"
-            >
-              <HomeView onSelect={handleSelectPeriod} />
+          {!selectedPeriod ? (
+            <motion.div key="home" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.2 }} className="app-screen home-screen">
+              <HomeView onSelect={selectPeriod} />
             </motion.div>
           ) : (
-            <motion.div
-              key="detail"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 20 }}
-              transition={{ duration: 0.3 }}
-              className="flex-1 overflow-y-auto pb-24 bg-theme-surface"
-            >
-              {selectedPeriod && currentMessage && (
-                <DetailView
-                  period={selectedPeriod}
-                  message={currentMessage}
-                  onBack={handleBack}
-                  onShare={handleShare}
-                  onCopyText={handleCopyText}
-                  onGenerate={handleGenerateNew}
-                  isGenerating={isGenerating}
-                  isSharing={isSharing}
-                  isUnlockingGenerations={isUnlockingGenerations}
-                  generationsRemaining={generationsRemaining[selectedPeriod.id] ?? 0}
-                />
-              )}
+            <motion.div key={selectedPeriod.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} transition={{ duration: 0.2 }} className="app-screen detail-screen bg-theme-surface">
+              <DetailView period={selectedPeriod} message={currentMessage!} onBack={goHome} onShare={shareMessage} onCopyText={copyText}
+                onGenerateNext={generateNext} onUsePhoto={useMyPhoto} busyPhase={busyPhase} isDayReady={cacheReadyDay === today}
+                isSharing={isSharing} isPreparingArt={art.isPreparing} artPreviewUrl={art.url} artLayers={art.layers} onMoveText={movePersonalText}
+                actionError={actionError} online={online} aiAvailable={aiAvailability.available} />
             </motion.div>
           )}
         </AnimatePresence>
-
-        <div className="absolute bottom-0 left-0 w-full z-50 flex flex-col">
-          <div className="w-full h-20 flex justify-around items-center px-8 pb-2 bg-white/90 backdrop-blur-xl border-t border-gray-100 shadow-[0_-4px_24px_rgba(0,0,0,0.02)]">
-            <button
-              type="button"
-              className="flex flex-col items-center justify-center bg-theme-primary-container/20 text-theme-primary rounded-full px-6 py-1.5 transition-all duration-300 scale-105"
-            >
-              <Home size={22} className="fill-current" />
-              <span className="text-[10px] font-bold uppercase tracking-widest mt-1">Início</span>
+        {!selectedPeriod && <nav aria-label={t("Navegação principal")} className="app-navigation">
+          <div className="w-full h-20 flex justify-around items-center px-8 pb-2 bg-white/90 backdrop-blur-xl border-t border-gray-100">
+            <button type="button" onClick={goHome} aria-current={!selectedPeriod ? 'page' : undefined} className="min-h-11 flex flex-col items-center justify-center text-theme-primary rounded-full px-6 py-1.5 focus-visible:outline-2 focus-visible:outline-theme-primary">
+              <Home size={22} /><span className="text-xs font-bold mt-1">{t("Início")}</span>
             </button>
-            <button
-              type="button"
-              className="flex flex-col items-center justify-center text-theme-on-surface/40 px-6 py-1.5 hover:text-theme-primary transition-colors"
-            >
-              <Bookmark size={22} />
-              <span className="text-[10px] font-bold uppercase tracking-widest mt-1">Salvos</span>
-            </button>
-            {SHOW_SETTINGS_NAV && <SettingsNavButton />}
+            {ADS_ENABLED && isNativeAdsPlatform() && online && (
+              <button type="button" className="min-h-11 text-xs text-theme-on-surface-variant px-3 py-2" onClick={() => void showAdPrivacyOptions().then((shown) => {
+                if (!shown) alert(t('Não há opções de anúncios disponíveis no momento. Tente novamente mais tarde.'));
+              })}>{t("Privacidade dos anúncios")}</button>
+            )}
           </div>
-        </div>
+        </nav>}
       </div>
     </div>
   );

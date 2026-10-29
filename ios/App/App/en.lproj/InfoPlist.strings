@@ -1,0 +1,5 @@
+"CFBundleDisplayName" = "Good Morning, Dear Ones";
+"NSPhotoLibraryUsageDescription" = "Choose a photo for your message background. Your photo stays on this device.";
+"NSPhotoLibraryAddUsageDescription" = "Save your message image to your photo library when you choose this option.";
+"NSCameraUsageDescription" = "Camera access lets you prepare a photo for your message if you choose this feature.";
+"NSUserTrackingUsageDescription" = "Your permission allows advertising partners to use device data to measure ads across other companies’ apps and websites. You can continue using the app if you decline.";

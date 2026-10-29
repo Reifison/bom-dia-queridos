@@ -1,3 +1,4 @@
+import { t } from '../lib/locale';
 import { Capacitor } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
@@ -5,27 +6,24 @@ import { Share } from '@capacitor/share';
 export type ShareDailyMessageResult =
   | 'shared'
   | 'downloaded'
-  | 'copied'
   | 'cancelled';
 
 export interface ShareDailyMessageOptions {
   fileName?: string;
-  title?: string;
   dialogTitle?: string;
 }
 
-const DEFAULT_FILE_NAME = 'mensagem-do-dia.jpg';
-const DEFAULT_TITLE = 'Mensagem do Dia';
+const DEFAULT_FILE_NAME = t('mensagem-do-dia.jpg');
 
 /**
  * Compartilha uma mensagem com a imagem final já renderizada.
  *
  * A imagem deve ser um Blob/File (por exemplo, o resultado de canvas.toBlob()).
  * Em iOS/Android, tenta usar @capacitor/share + @capacitor/filesystem.
- * No navegador, tenta Web Share com arquivo e cai para download/cópia.
+ * No navegador, tenta Web Share com arquivo e cai para download.
+ * O texto já faz parte da arte: nunca enviar legenda ou mensagem separada.
  */
 export async function shareDailyMessage(
-  text: string,
   image: Blob | File,
   options: ShareDailyMessageOptions = {},
 ): Promise<ShareDailyMessageResult> {
@@ -34,12 +32,10 @@ export async function shareDailyMessage(
   }
 
   const fileName = normalizeFileName(options.fileName ?? DEFAULT_FILE_NAME, image.type);
-  const title = options.title ?? DEFAULT_TITLE;
 
   if (isNativeCapacitor()) {
-    const nativeResult = await tryNativeShare(text, image, {
+    const nativeResult = await tryNativeShare(image, {
       fileName,
-      title,
       dialogTitle: options.dialogTitle,
     });
 
@@ -48,12 +44,13 @@ export async function shareDailyMessage(
     }
   }
 
-  const webResult = await tryWebShare(text, image, fileName, title);
+  const webResult = await tryWebShare(image, fileName);
   if (webResult) {
     return webResult;
   }
 
-  return downloadAndCopy(text, image, fileName);
+  if (downloadBlob(image, fileName)) return 'downloaded';
+  throw new Error(t('Não foi possível compartilhar ou baixar a imagem.'));
 }
 
 function isNativeCapacitor(): boolean {
@@ -61,9 +58,8 @@ function isNativeCapacitor(): boolean {
 }
 
 async function tryNativeShare(
-  text: string,
   image: Blob | File,
-  options: Required<Pick<ShareDailyMessageOptions, 'fileName' | 'title'>> &
+  options: Required<Pick<ShareDailyMessageOptions, 'fileName'>> &
     Pick<ShareDailyMessageOptions, 'dialogTitle'>,
 ): Promise<ShareDailyMessageResult | null> {
   let localFile: { path: string } | null = null;
@@ -80,8 +76,6 @@ async function tryNativeShare(
     localFile = { path };
 
     await Share.share({
-      title: options.title,
-      text,
       files: [result.uri],
       dialogTitle: options.dialogTitle,
     });
@@ -110,10 +104,8 @@ async function tryNativeShare(
 }
 
 async function tryWebShare(
-  text: string,
   image: Blob | File,
   fileName: string,
-  title: string,
 ): Promise<ShareDailyMessageResult | null> {
   if (typeof navigator === 'undefined' || typeof navigator.share !== 'function') {
     return null;
@@ -122,7 +114,7 @@ async function tryWebShare(
   const file = image instanceof File
     ? new File([image], fileName, { type: image.type || 'image/jpeg' })
     : new File([image], fileName, { type: image.type || 'image/jpeg' });
-  const shareData = { title, text, files: [file] };
+  const shareData = { files: [file] };
 
   if (typeof navigator.canShare === 'function' && !navigator.canShare({ files: [file] })) {
     return null;
@@ -137,22 +129,6 @@ async function tryWebShare(
     }
     return null;
   }
-}
-
-async function downloadAndCopy(
-  text: string,
-  image: Blob | File,
-  fileName: string,
-): Promise<ShareDailyMessageResult> {
-  const downloaded = downloadBlob(image, fileName);
-  const copied = await copyTextToClipboard(text);
-  if (downloaded) {
-    return 'downloaded';
-  }
-  if (copied) {
-    return 'copied';
-  }
-  throw new Error('Não foi possível baixar a imagem nem copiar o texto.');
 }
 
 function downloadBlob(blob: Blob, fileName: string): boolean {
@@ -176,11 +152,19 @@ function downloadBlob(blob: Blob, fileName: string): boolean {
 /** Copies text using the modern API, with a safe legacy browser fallback. */
 export async function copyTextToClipboard(text: string): Promise<boolean> {
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      await navigator.clipboard.writeText(text);
-      return true;
+      // Background browser tabs can leave the clipboard promise pending until
+      // focus returns. A completed image download must still release the UI.
+      const copied = await Promise.race([
+        navigator.clipboard.writeText(text).then(() => true),
+        new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), 2_000); }),
+      ]);
+      if (copied) return true;
     } catch {
       // Continue with the legacy clipboard fallback below.
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

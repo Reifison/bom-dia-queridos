@@ -1,3 +1,4 @@
+import { t } from '../../lib/locale';
 export function AdBannerPlaceholder({ position: _position }: { position: 'top' | 'bottom' }) {
   return (
     <div className="w-full px-4 py-2 bg-theme-surface z-40">
@@ -16,7 +17,7 @@ export function AdBannerPlaceholder({ position: _position }: { position: 'top' |
             <span className="text-yellow-400">★</span>
             <span>4.8</span>
             <span className="mx-1">•</span>
-            <span>GRÁTIS</span>
+            <span>{t("GRÁTIS")}</span>
           </div>
         </div>
 
@@ -24,8 +25,7 @@ export function AdBannerPlaceholder({ position: _position }: { position: 'top' |
           type="button"
           className="px-4 py-1.5 bg-blue-600 text-white text-sm font-bold rounded-full hover:bg-blue-700 transition-colors shrink-0"
         >
-          Obter
-        </button>
+          {t("Obter")}</button>
       </div>
     </div>
   );

@@ -1,0 +1,11 @@
+{
+  "projectId": "bom-dia-queridos",
+  "appId": "1:631290255780:web:748c5bd14b8410fe804931",
+  "apiKey": "AIzaSyAvWzn79ONXFI9H2HMfW1kJa8bEVRbFNhM",
+  "authDomain": "bom-dia-queridos.firebaseapp.com",
+  "storageBucket": "bom-dia-queridos.firebasestorage.app",
+  "messagingSenderId": "631290255780",
+  "appCheckSiteKey": "6LehOgIuAAAAABZ8LjuQ_Dr2BspXMO4qCaALdyjr",
+  "aiEnabled": true,
+  "aiModel": "gemini-3.1-flash-image"
+}

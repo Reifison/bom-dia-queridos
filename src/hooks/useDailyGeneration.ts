@@ -1,172 +1,102 @@
-import { useCallback, useRef, useState } from 'react';
-import {
-  consumeGenerationCredit,
-  getGenerationCredits,
-  grantRewardedGenerationCredits,
-} from '../lib/adCadence';
-import { devLog } from '../lib/logger';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { consumeGenerationCredit, getGenerationCredits, grantRewardedGenerationCredits } from '../lib/adCadence';
+import { createDailyMessageLoader, generationErrorMessage, loadDailyQuota, saveDailyQuota } from '../lib/dailyGeneration';
 import { getTodayLocal } from '../lib/periodDayCache';
 import { generateDailyImage, generateDailyMessage } from '../services/geminiService';
 import type { DailyMessage, PeriodId } from '../types/period';
 
-const USER_ERROR = 'Não foi possível gerar agora. Tente de novo em instantes.';
+const readCredits = () => ({
+  morning: getGenerationCredits('morning'),
+  afternoon: getGenerationCredits('afternoon'),
+  night: getGenerationCredits('night'),
+});
+type ApplyMessage = (message: DailyMessage, day: string) => void;
 
-const QUOTA_ERROR =
-  'Limite da API Google (Gemini) atingido: quota do plano gratuito esgotada ou demasiados pedidos. Ative faturação em Google AI Studio / Google Cloud Billing ou tente mais tarde.';
+export function useDailyGeneration(day: string, activePeriod?: PeriodId) {
+  const [quota, setQuota] = useState(() => loadDailyQuota(day));
+  const [credits, setCredits] = useState(() => ({ day, remaining: readCredits() }));
+  const [pendingKeys, setPendingKeys] = useState<Set<string>>(() => new Set());
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const loaderRef = useRef<ReturnType<typeof createDailyMessageLoader> | null>(null);
+  loaderRef.current ??= createDailyMessageLoader(generateDailyMessage, generateDailyImage);
+  const manualLocks = useRef(new Set<string>());
 
-const MISSING_API_URL_ERROR =
-  'O app não sabe onde está a API. No ficheiro .env.local defina VITE_API_ORIGIN=http://127.0.0.1:8787 (iOS Simulator), http://10.0.2.2:8787 (Android Emulator) ou http://IP-DA-MÁQUINA:8787 (dispositivo físico). Sincronize o Capacitor novamente e mantenha a API a correr.';
+  useEffect(() => {
+    setQuota(loadDailyQuota(day));
+    setCredits({ day, remaining: readCredits() });
+    setErrors({});
+  }, [day]);
 
-const INITIAL_REMAINING: Record<PeriodId, number> = {
-  morning: 1,
-  afternoon: 1,
-  night: 1,
-};
+  const base = quota.day === day ? quota.remaining : loadDailyQuota(day).remaining;
+  const rewarded = credits.day === day ? credits.remaining : readCredits();
+  const generationsRemaining = {
+    morning: base.morning + rewarded.morning,
+    afternoon: base.afternoon + rewarded.afternoon,
+    night: base.night + rewarded.night,
+  };
 
-const DAILY_QUOTA_STORAGE_KEY = 'bdq_daily_generation_quota.v1';
-
-type DailyQuotaState = {
-  day: string;
-  remaining: Record<PeriodId, number>;
-};
-
-function loadDailyQuota(): Record<PeriodId, number> {
-  const today = getTodayLocal();
-  try {
-    const raw = localStorage.getItem(DAILY_QUOTA_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<DailyQuotaState>;
-      if (parsed.day === today && parsed.remaining) {
-        return {
-          morning: Math.max(0, parsed.remaining.morning ?? 0),
-          afternoon: Math.max(0, parsed.remaining.afternoon ?? 0),
-          night: Math.max(0, parsed.remaining.night ?? 0),
-        };
+  const runGeneration = useCallback(async (period: PeriodId, requestDay: string, apply: ApplyMessage) => {
+    const key = `${requestDay}:${period}`;
+    setPendingKeys((previous) => new Set(previous).add(key));
+    setErrors((previous) => ({ ...previous, [key]: '' }));
+    try {
+      const message = await loaderRef.current!.load(period, requestDay);
+      // A result started yesterday must not be cached as today's message.
+      if (getTodayLocal() !== requestDay) return false;
+      apply(message, requestDay);
+      return true;
+    } catch (error) {
+      if (getTodayLocal() === requestDay) {
+        setErrors((previous) => ({ ...previous, [key]: generationErrorMessage(error) }));
       }
-    }
-  } catch {
-    // Private mode and unavailable storage keep the session-only quota.
-  }
-  return { ...INITIAL_REMAINING };
-}
-
-function saveDailyQuota(remaining: Record<PeriodId, number>): void {
-  try {
-    localStorage.setItem(DAILY_QUOTA_STORAGE_KEY, JSON.stringify({ day: getTodayLocal(), remaining }));
-  } catch {
-    // The in-memory state remains usable when storage cannot be written.
-  }
-}
-
-function initialRewardedCredits(): Record<PeriodId, number> {
-  return {
-    morning: getGenerationCredits('morning'),
-    afternoon: getGenerationCredits('afternoon'),
-    night: getGenerationCredits('night'),
-  };
-}
-
-export function useDailyGeneration() {
-  const [baseGenerationsRemaining, setBaseGenerationsRemaining] = useState(loadDailyQuota);
-  const [rewardedCredits, setRewardedCredits] = useState(initialRewardedCredits);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const manualGenerationLockRef = useRef(false);
-
-  const generationsRemaining: Record<PeriodId, number> = {
-    morning: baseGenerationsRemaining.morning + rewardedCredits.morning,
-    afternoon: baseGenerationsRemaining.afternoon + rewardedCredits.afternoon,
-    night: baseGenerationsRemaining.night + rewardedCredits.night,
-  };
-
-  const handleGenerationError = useCallback((e: unknown) => {
-    devLog.error('Generation failed');
-    const http =
-      typeof e === 'object' && e !== null && 'httpStatus' in e
-        ? (e as { httpStatus: number }).httpStatus
-        : 0;
-    const code = e instanceof Error ? e.message : '';
-    if (code === 'MISSING_VITE_API_ORIGIN') {
-      alert(MISSING_API_URL_ERROR);
-    } else if (http === 429 || code === 'QUOTA_EXCEEDED') {
-      alert(QUOTA_ERROR);
-    } else {
-      alert(USER_ERROR);
+      return false;
+    } finally {
+      setPendingKeys((previous) => {
+        const next = new Set(previous);
+        next.delete(key);
+        return next;
+      });
     }
   }, []);
 
-  const fetchAndBuildMessage = useCallback(async (periodId: PeriodId): Promise<DailyMessage> => {
-    const [newTextData, imagePayload] = await Promise.all([
-      generateDailyMessage(periodId),
-      generateDailyImage(periodId),
-    ]);
-    return {
-      periodId,
-      mainText: newTextData.mainText,
-      quote: newTextData.quote,
-      image: imagePayload,
-    };
-  }, []);
-
-  /** Entrada no detalhe: uma geração por período por dia, independente dos outros menus. */
   const autoGenerateForPeriod = useCallback(
-    async (periodId: PeriodId, applyMessage: (msg: DailyMessage) => void) => {
-      setIsGenerating(true);
-      try {
-        const msg = await fetchAndBuildMessage(periodId);
-        applyMessage(msg);
-      } catch (e) {
-        handleGenerationError(e);
-      } finally {
-        setIsGenerating(false);
-      }
-    },
-    [fetchAndBuildMessage, handleGenerationError]
+    (period: PeriodId, apply: ApplyMessage) => runGeneration(period, getTodayLocal(), apply),
+    [runGeneration]
   );
 
-  const generateForPeriod = useCallback(
-    async (periodId: PeriodId, applyMessage: (msg: DailyMessage) => void) => {
-      if (manualGenerationLockRef.current) return;
-      const usingBaseQuota = (baseGenerationsRemaining[periodId] ?? 0) > 0;
-      const usingRewardedCredit = !usingBaseQuota && (rewardedCredits[periodId] ?? 0) > 0;
-      if (!usingBaseQuota && !usingRewardedCredit) return;
-
-      manualGenerationLockRef.current = true;
-      setIsGenerating(true);
-      try {
-        const msg = await fetchAndBuildMessage(periodId);
-        applyMessage(msg);
-        if (usingBaseQuota) {
-          setBaseGenerationsRemaining((prev) => {
-            const next = { ...prev, [periodId]: Math.max(0, (prev[periodId] ?? 0) - 1) };
-            saveDailyQuota(next);
-            return next;
-          });
-        } else if (consumeGenerationCredit(periodId)) {
-          setRewardedCredits((prev) => ({
-            ...prev,
-            [periodId]: getGenerationCredits(periodId),
-          }));
-        }
-      } catch (e) {
-        handleGenerationError(e);
-      } finally {
-        setIsGenerating(false);
-        manualGenerationLockRef.current = false;
+  const generateForPeriod = useCallback(async (period: PeriodId, apply: ApplyMessage) => {
+    const requestDay = getTodayLocal();
+    const key = `${requestDay}:${period}`;
+    if (manualLocks.current.has(key) || loaderRef.current!.isPending(period, requestDay)) return;
+    const usingBase = (requestDay === quota.day ? quota : loadDailyQuota(requestDay)).remaining[period] > 0;
+    if (!usingBase && getGenerationCredits(period) <= 0) return;
+    manualLocks.current.add(key);
+    try {
+      if (!(await runGeneration(period, requestDay, apply))) return;
+      if (usingBase) {
+        setQuota((previous) => {
+          const current = previous.day === requestDay ? previous : loadDailyQuota(requestDay);
+          const next = { day: requestDay, remaining: { ...current.remaining, [period]: Math.max(0, current.remaining[period] - 1) } };
+          saveDailyQuota(next);
+          return next;
+        });
+      } else if (consumeGenerationCredit(period)) {
+        setCredits({ day: requestDay, remaining: readCredits() });
       }
-    },
-    [baseGenerationsRemaining, fetchAndBuildMessage, handleGenerationError, rewardedCredits]
-  );
+    } finally { manualLocks.current.delete(key); }
+  }, [quota, runGeneration]);
 
-  const grantRewardedCredits = useCallback((periodId: PeriodId): number => {
-    const total = grantRewardedGenerationCredits(periodId);
-    setRewardedCredits((prev) => ({ ...prev, [periodId]: total }));
+  const grantRewardedCredits = useCallback((period: PeriodId): number => {
+    const total = grantRewardedGenerationCredits(period);
+    setCredits({ day: getTodayLocal(), remaining: readCredits() });
     return total;
   }, []);
 
+  const activeKey = `${day}:${activePeriod}`;
   return {
     generationsRemaining,
-    rewardedCredits,
-    isGenerating,
+    isGenerating: !!activePeriod && pendingKeys.has(activeKey),
+    generationError: activePeriod ? errors[activeKey] || null : null,
     generateForPeriod,
     autoGenerateForPeriod,
     grantRewardedCredits,

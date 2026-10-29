@@ -6,7 +6,7 @@
  */
 
 export const INTERSTITIAL_MESSAGE_THRESHOLD = 2;
-export const INTERSTITIAL_MIN_INTERVAL_MS = 3 * 60 * 1000;
+export const INTERSTITIAL_MIN_INTERVAL_MS = 60 * 1000;
 export const REWARDED_CREDITS_PER_GRANT = 2;
 
 export type AdPeriod = string;
@@ -91,7 +91,7 @@ function readState(): AdCadenceState {
   state ??= memoryState ? cloneState(memoryState) : emptyState(today);
 
   if (state.localDate !== today) {
-    state = emptyState(today);
+    state = { ...emptyState(today), lastInterstitialShownAt: state.lastInterstitialShownAt };
     writeState(state);
   }
 
@@ -130,6 +130,9 @@ export function registerMessageOpening(): number {
   writeState(state);
   return state.messagesOpenedSinceInterstitial;
 }
+
+/** Opening, generating, choosing a photo and sharing/saving use the same cap. */
+export const registerContentAction = registerMessageOpening;
 
 /**
  * Checks whether an interstitial is eligible right now.

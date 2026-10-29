@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Bom dia queridos</string>
     <string name="title_activity_main">Bom dia queridos</string>
-    <string name="package_name">com.bomdiaqueridos.app</string>
-    <string name="custom_url_scheme">com.bomdiaqueridos.app</string>
-    <string name="admob_app_id">ca-app-pub-1257467824403671~9999916542</string>
+    <string name="package_name" translatable="false">com.bomdiaqueridos.app</string>
+    <string name="custom_url_scheme" translatable="false">com.bomdiaqueridos.app</string>
+    <string name="admob_app_id" translatable="false">ca-app-pub-1257467824403671~9999916542</string>
 </resources>

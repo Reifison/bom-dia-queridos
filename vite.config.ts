@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
+import { offlineShell } from './scripts/viteOfflineShell';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -10,7 +11,7 @@ export default defineConfig(({ mode }) => {
   return {
     // Relative paths so Capacitor/WKWebView loads JS/CSS from the app bundle.
     base: './',
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), offlineShell()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

@@ -1,0 +1,9 @@
+{
+  "packageName": "com.bomdiaqueridos.app",
+  "versionName": "1.4.0",
+  "versionCode": 3,
+  "releaseNotes": {
+    "pt-BR": "Mensagens e fotos para compartilhar mesmo sem internet. Mais opções de imagens, uso de fotos pessoais e melhorias na composição dos cartões. Interface em português e inglês, ajustes de compartilhamento, privacidade e anúncios.",
+    "en-US": "Messages and photos to share even when offline. More images, personal photo backgrounds, and improved card layouts. Portuguese and English interface, plus improvements to sharing, privacy, and ads."
+  }
+}

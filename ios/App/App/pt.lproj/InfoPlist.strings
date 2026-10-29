@@ -1,0 +1,5 @@
+"CFBundleDisplayName" = "Bom dia queridos";
+"NSPhotoLibraryUsageDescription" = "Escolha uma foto para usar no fundo da sua mensagem. Sua foto permanece neste aparelho.";
+"NSPhotoLibraryAddUsageDescription" = "Salve a imagem da sua mensagem na biblioteca de fotos quando escolher essa opção.";
+"NSCameraUsageDescription" = "O acesso à câmera permite preparar uma foto para a sua mensagem, se você escolher usar essa função.";
+"NSUserTrackingUsageDescription" = "Sua permissão permite que parceiros de publicidade usem dados do aparelho para medir anúncios em apps e sites de outras empresas. Você pode continuar usando o app se recusar.";

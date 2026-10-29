@@ -1,0 +1,9 @@
+{
+  "packageName": "com.bomdiaqueridos.app",
+  "versionName": "1.4.1",
+  "versionCode": 4,
+  "releaseNotes": {
+    "pt-BR": "Correções na composição e exibição de imagens, ajustes no carregamento de anúncios e melhorias de estabilidade.",
+    "en-US": "Fixes to image rendering and display, adjustments to ad loading, and stability improvements."
+  }
+}

@@ -8,7 +8,7 @@ import { Capacitor } from '@capacitor/core';
  * num aparelho físico, use o IP da máquina na rede local.
  */
 export function getViteApiOrigin(): string {
-  const o = import.meta.env.VITE_API_ORIGIN;
+  const o = import.meta.env?.VITE_API_ORIGIN;
   return typeof o === 'string' ? o.trim().replace(/\/$/, '') : '';
 }
 

@@ -15,4 +15,4 @@ ENV NODE_ENV=production
 ENV PORT=8787
 EXPOSE 8787
 
-CMD ["npm", "run", "start"]
+CMD ["npm", "run", "legacy:server"]
