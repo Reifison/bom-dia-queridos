@@ -5,7 +5,7 @@
  * register an interstitial only after the SDK confirms that it was shown.
  */
 
-export const INTERSTITIAL_MESSAGE_THRESHOLD = 2;
+export const INTERSTITIAL_MESSAGE_THRESHOLD = 1;
 export const INTERSTITIAL_MIN_INTERVAL_MS = 60 * 1000;
 export const REWARDED_CREDITS_PER_GRANT = 2;
 

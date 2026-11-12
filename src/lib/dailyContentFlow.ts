@@ -13,12 +13,25 @@ const AI_FAILURE_MESSAGES: Record<string, string> = {
   FIREBASE_AI_QUOTA_EXCEEDED: 'O limite de gerações foi atingido. Tente novamente mais tarde.',
 };
 
+type ContentLogLevel = 'info' | 'warn';
+
+function logContentFlow(event: string, fields: Record<string, string>, level: ContentLogLevel = 'info'): void {
+  // Never pass errors, image data, prompts, identifiers, tokens, or URLs to logs.
+  globalThis.console?.[level]?.('[daily-content]', { event, ...fields });
+}
+
+function safeErrorCode(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    ? error.code : '';
+  return /^(FIREBASE_AI|PERSONAL_PHOTO)_[A-Z_]+$/.test(code) && code.length <= 64 ? code : 'UNKNOWN';
+}
+
 function aiFailureMessage(error: unknown): string {
   const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
     ? error.code : '';
-  // Record only an allowlisted category, never raw errors, prompts, tokens or URLs.
-  const safeCode = /^(FIREBASE_AI|PERSONAL_PHOTO)_[A-Z_]+$/.test(code) && code.length <= 64 ? code : 'UNKNOWN';
-  globalThis.console?.warn('[image-generation]', { code: safeCode });
+  const userMessage = error && typeof error === 'object' && 'userMessage' in error &&
+    typeof error.userMessage === 'string' ? error.userMessage.trim() : '';
+  if (code.startsWith('FIREBASE_AI_') && userMessage) return userMessage;
   return Object.hasOwn(AI_FAILURE_MESSAGES, code) ? AI_FAILURE_MESSAGES[code]
     : 'A criação da imagem está indisponível agora. Preparamos outra mensagem para você.';
 }
@@ -84,6 +97,7 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
   };
 
   const run = async (
+    action: 'generate' | 'personal-photo',
     period: PeriodId,
     day: string,
     work: (isCurrent: () => boolean) => Promise<ContentActionResult>,
@@ -93,14 +107,18 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
     const isCurrent = () => ticket === revision && deps.currentDay() === day && deps.isCurrent(period, day);
     if (!isCurrent()) return 'cancelled';
     busy = true;
+    logContentFlow('action-started', { action, period });
     deps.onError(null);
     deps.onBusy('ad');
     try {
       // Ad/network failure must not block the bank or the user's photo picker.
       try { await deps.beforeAction(isCurrent); } catch { /* Continue without an ad. */ }
       if (!isCurrent()) return 'cancelled';
-      return await work(isCurrent);
+      const result = await work(isCurrent);
+      logContentFlow('action-finished', { action, period, result });
+      return result;
     } catch (error) {
+      logContentFlow('action-failed', { action, period, code: safeErrorCode(error) }, 'warn');
       if (isCurrent()) {
         const message = error && typeof error === 'object' && 'userMessage' in error && typeof error.userMessage === 'string'
           ? error.userMessage : 'Não foi possível preparar a imagem. Sua mensagem continua disponível. Tente novamente.';
@@ -113,12 +131,31 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
     }
   };
 
-  const useBank = async (period: PeriodId, day: string, isCurrent: () => boolean): Promise<ContentActionResult> => {
+  const useBank = async (
+    period: PeriodId,
+    day: string,
+    isCurrent: () => boolean,
+    reason: 'scheduled' | 'ai-fallback',
+  ): Promise<ContentActionResult> => {
     deps.onBusy('bank');
+    logContentFlow('bank-started', { period, reason });
     const previous = deps.readMessage(period, day);
-    const image = await deps.selectImage(period, day, previous.bankImageId ?? previous.image);
+    let image: BankSelection;
+    try {
+      image = await deps.selectImage(period, day, previous.bankImageId ?? previous.image);
+      logContentFlow('bank-image-selected', { period, source: image.source, reason });
+    } catch (error) {
+      logContentFlow('bank-failed', { period, stage: 'image-selection', code: safeErrorCode(error) }, 'warn');
+      throw error;
+    }
     if (!isCurrent()) return 'cancelled';
-    const mainText = await deps.selectText(period, day, previous.mainText);
+    let mainText: string;
+    try {
+      mainText = await deps.selectText(period, day, previous.mainText);
+    } catch (error) {
+      logContentFlow('bank-failed', { period, stage: 'text-selection', code: safeErrorCode(error) }, 'warn');
+      throw error;
+    }
     if (!isCurrent()) return 'cancelled';
     deps.writeMessage({
       periodId: period,
@@ -128,6 +165,7 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
       mainText,
       generationFlow: { day, manualBankRefreshes: Math.min(Number.MAX_SAFE_INTEGER, manualRefreshes(previous, day) + 1) },
     }, day);
+    logContentFlow('bank-completed', { period, source: image.source, reason });
     return 'updated';
   };
 
@@ -137,29 +175,48 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
     remainingAi(period: PeriodId, day: string) { return quotaFor(day).remaining[period]; },
 
     generate(period: PeriodId, day: string): Promise<ContentActionResult> {
-      return run(period, day, async (isCurrent) => {
+      return run('generate', period, day, async (isCurrent) => {
         const previous = deps.readMessage(period, day);
         if (nextContentSource(previous, day, quotaFor(day).remaining[period], deps.aiAvailable()) === 'bank') {
-          return useBank(period, day, isCurrent);
+          logContentFlow('source-selected', { period, source: 'bank' });
+          return useBank(period, day, isCurrent, 'scheduled');
         }
 
+        logContentFlow('source-selected', { period, source: 'firebase-ai' });
         deps.onBusy('ai');
+        logContentFlow('ai-request-started', { period });
+        let generated: string;
+        try {
+          generated = await deps.generateAi(period);
+        } catch (error) {
+          if (!isCurrent()) return 'cancelled';
+          logContentFlow('ai-request-failed', { period, code: safeErrorCode(error) }, 'warn');
+          const result = await useBank(period, day, isCurrent, 'ai-fallback');
+          if (isCurrent()) deps.onError(aiFailureMessage(error));
+          return result;
+        }
+
+        logContentFlow('ai-request-succeeded', { period });
         let image: string;
         try {
-          image = await deps.prepareAi(await deps.generateAi(period));
+          image = await deps.prepareAi(generated);
         } catch (error) {
-          // No successful image was produced: retain the AI allowance and give
-          // another local composition rather than stranding the user on an error.
           if (!isCurrent()) return 'cancelled';
-          const result = await useBank(period, day, isCurrent);
+          logContentFlow('ai-image-preparation-failed', { period, code: safeErrorCode(error) }, 'warn');
+          const result = await useBank(period, day, isCurrent, 'ai-fallback');
           if (isCurrent()) deps.onError(aiFailureMessage(error));
           return result;
         }
         consumeAi(period, day);
+        logContentFlow('ai-image-prepared', { period });
 
         let saved: BankSelection | undefined;
-        try { saved = await deps.saveAi(period, image, day); }
-        catch { /* A usable image may still be shared even when storage is full. */ }
+        try {
+          saved = await deps.saveAi(period, image, day);
+          logContentFlow('ai-bank-save-succeeded', { period, source: saved.source });
+        } catch {
+          logContentFlow('ai-bank-save-failed', { period, reason: 'storage-unavailable' }, 'warn');
+        }
         // Keep a paid, completed image in the personal bank even after Home or midnight.
         if (!isCurrent()) return 'cancelled';
         const mainText = await deps.selectText(period, day, previous.mainText);
@@ -172,13 +229,14 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
           mainText,
           generationFlow: { day, manualBankRefreshes: Math.max(1, manualRefreshes(previous, day)) },
         }, day);
+        logContentFlow('ai-card-updated', { period, banked: saved ? 'yes' : 'no' });
         if (!saved) deps.onError('A imagem está pronta, mas não foi possível guardá-la no seu banco. Confira o espaço disponível no aparelho.');
         return 'updated';
       });
     },
 
     usePersonalPhoto(period: PeriodId, day: string): Promise<ContentActionResult> {
-      return run(period, day, async (isCurrent) => {
+      return run('personal-photo', period, day, async (isCurrent) => {
         deps.onBusy('photo');
         const image = await deps.pickPhoto();
         if (!image || !isCurrent()) return 'cancelled';

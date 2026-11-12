@@ -292,6 +292,37 @@ test('attestation failure preserves its actionable message and AI quota when fal
   assert.equal(harness.calls.errors.at(-1), 'Não foi possível validar a segurança do app. Tente novamente.');
 });
 
+test('Firebase billing, model, and access errors preserve their actionable messages during fallback', async () => {
+  const failures = [
+    {
+      code: 'FIREBASE_AI_BILLING_REQUIRED',
+      userMessage: 'A geração por IA exige um projeto Firebase com faturamento habilitado.',
+    },
+    {
+      code: 'FIREBASE_AI_MODEL_UNAVAILABLE',
+      userMessage: 'O modelo de imagem está indisponível no momento.',
+    },
+    {
+      code: 'FIREBASE_AI_ACCESS_DENIED',
+      userMessage: 'O Firebase não autorizou a geração. Confira as configurações do projeto.',
+    },
+  ];
+
+  for (const failure of failures) {
+    const harness = createHarness();
+    seedAfterManualRefresh(harness, 'morning', DAY);
+    harness.state.generateImpl = async () => {
+      throw Object.assign(new Error('provider detail stays private'), failure);
+    };
+    const flow = harness.createFlow();
+
+    assert.equal(await flow.generate('morning', DAY), 'updated');
+    assert.equal(harness.calls.errors.at(-1), failure.userMessage);
+    assert.equal(flow.remainingAi('morning', DAY), 1, 'failed generation keeps the allowance available');
+    assert.equal(harness.messages.get(`${DAY}:morning`)?.source, 'offline');
+  }
+});
+
 test('AI storage failure shows a clear warning and does not claim the image was banked', async () => {
   const harness = createHarness();
   seedAfterManualRefresh(harness, 'morning', DAY);

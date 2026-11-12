@@ -8,7 +8,7 @@ import { HomeView } from './features/home/HomeView';
 import { useLocalDay } from './hooks/useLocalDay';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { useMessageArt } from './hooks/useMessageArt';
-import { registerInterstitialShown, registerContentAction, shouldShowInterstitial } from './lib/adCadence';
+import { registerInterstitialShown, registerContentAction } from './lib/adCadence';
 import { createDailyContentFlow, type ContentBusyPhase } from './lib/dailyContentFlow';
 import { loadDailyQuota, saveDailyQuota } from './lib/dailyGeneration';
 import { getOfflineDailyMessage } from './lib/offlineDailyContent';
@@ -19,7 +19,7 @@ import { isOfflineReadyMessage, type DailyMessage, type Period, type PeriodId } 
 import { generateFirebaseImage, getFirebaseAiAvailability } from './services/firebaseImageService';
 import { pickPersonalPhoto, prepareImageForBank } from './services/personalPhotoService';
 import { copyTextToClipboard, shareDailyMessage } from './services/shareDailyMessage';
-import { hideHomeBanner, initializeMobileAds, isInterstitialReady, isNativeAdsPlatform, preloadInterstitial, removeHomeBanner, showAdPrivacyOptions, showHomeBanner, showInterstitial } from './services/mobileAds';
+import { hideHomeBanner, initializeMobileAds, isNativeAdsPlatform, preloadInterstitial, removeHomeBanner, showAdPrivacyOptions, showHomeBanner, showInterstitial } from './services/mobileAds';
 
 const PERIOD_IDS: PeriodId[] = ['morning', 'afternoon', 'night'];
 
@@ -53,8 +53,7 @@ export default function App() {
   const beforeContentAction = useCallback(async (isCurrent: () => boolean) => {
     if (!isCurrent() || !ADS_ENABLED || !onlineRef.current || !isNativeAdsPlatform()) return;
     registerContentAction();
-    if (!shouldShowInterstitial()) return;
-    if (!isInterstitialReady()) { void preloadInterstitial(); return; }
+    if (!(await preloadInterstitial()) || !isCurrent()) return;
     await hideHomeBanner();
     if (!isCurrent()) return;
     if (await showInterstitial()) registerInterstitialShown();
@@ -201,7 +200,8 @@ export default function App() {
     try {
       const blob = await art.ensureBlob();
       const file = new File([blob], `${selectedPeriod.id}-${today}.jpg`, { type: blob.type });
-      try { await beforeContentAction(isCurrent); } catch { /* Sharing continues if the ad fails. */ }
+      if (!isCurrent()) return;
+      await beforeContentAction(isCurrent);
       if (!isCurrent()) return;
       const result = await shareDailyMessage(file, { dialogTitle: t('Compartilhar mensagem') });
       if (result === 'downloaded') alert(t('Imagem baixada. Use Copiar texto se quiser copiar a mensagem.'));

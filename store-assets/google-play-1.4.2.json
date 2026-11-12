@@ -1,0 +1,9 @@
+{
+  "packageName": "com.bomdiaqueridos.app",
+  "versionName": "1.4.2",
+  "versionCode": 5,
+  "releaseNotes": {
+    "pt-BR": "Aprimoramos a geração de imagens e corrigimos o cancelamento do compartilhamento. Ajustamos o carregamento de anúncios e melhoramos a estabilidade.",
+    "en-US": "Improved image generation and fixed share cancellation handling. Adjusted ad loading and improved overall stability."
+  }
+}

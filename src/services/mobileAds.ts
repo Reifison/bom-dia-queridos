@@ -381,6 +381,7 @@ export function removeHomeBanner(): Promise<void> {
 
 /** Preloads an interstitial with a single in-flight request. */
 export function preloadInterstitial(): Promise<boolean> {
+  if (interstitialShowing) return Promise.resolve(false);
   if (interstitialPrepared) return Promise.resolve(true);
   if (interstitialPreparation) return interstitialPreparation;
   if (Date.now() < interstitialRetryNotBefore) return Promise.resolve(false);
@@ -495,6 +496,7 @@ async function showInterstitialWithEvents(): Promise<boolean> {
     dismissalTimeoutMs: INTERSTITIAL_DISMISSAL_WATCHDOG_MS,
   });
   if (!lifecycle.success) logAdsFailure(`show-interstitial-${lifecycle.outcome}`, lifecycle.outcome);
+  if (lifecycle.shown && !lifecycle.success) throw new Error('AD_DISMISSAL_UNCONFIRMED');
   return lifecycle.success;
 }
 
@@ -536,14 +538,13 @@ export async function showInterstitial(): Promise<boolean> {
   interstitialShowing = true;
   try {
     const shown = await showInterstitialWithEvents();
-    if (shown) {
-      void preloadInterstitial();
-    } else {
+    if (!shown) {
       interstitialRetryNotBefore = Date.now() + INTERSTITIAL_RETRY_COOLDOWN_MS;
     }
     return shown;
   } finally {
     interstitialShowing = false;
+    void preloadInterstitial();
   }
 }
 

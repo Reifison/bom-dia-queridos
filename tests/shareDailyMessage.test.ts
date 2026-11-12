@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { copyTextToClipboard, shareDailyMessage } from '../src/services/shareDailyMessage';
+import { copyTextToClipboard, shareDailyMessage, isShareCancellation } from '../src/services/shareDailyMessage';
 
 function setGlobal(t: TestContext, name: string, value: unknown) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -59,4 +59,13 @@ test('a pending browser clipboard permission cannot keep sharing busy indefinite
   const copying = copyTextToClipboard('Boa tarde queridos!');
   t.mock.timers.tick(2_000);
   assert.equal(await copying, false);
+});
+
+
+test('iOS share cancellation is normal while presentation failures remain errors', () => {
+  assert.equal(isShareCancellation({ message: 'Share canceled' }), true);
+  assert.equal(isShareCancellation({ errorMessage: 'Share canceled' }), true);
+  assert.equal(isShareCancellation(new DOMException('Cancelled', 'AbortError')), true);
+  assert.equal(isShareCancellation({ message: "Can't share while sharing is in progress" }), false);
+  assert.equal(isShareCancellation(new Error('Error sharing item')), false);
 });

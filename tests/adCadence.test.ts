@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { registerContentAction, registerInterstitialShown, resetAdCadenceForLocalDate, shouldShowInterstitial } from '../src/lib/adCadence';
 
-test('content actions share the two-action threshold and one-minute interval', (t) => {
+test('content actions share the first-action threshold and one-minute interval', (t) => {
   const values = new Map<string, string>();
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: {
@@ -12,12 +12,12 @@ test('content actions share the two-action threshold and one-minute interval', (
   t.after(() => previous ? Object.defineProperty(globalThis, 'window', previous) : Reflect.deleteProperty(globalThis, 'window'));
   resetAdCadenceForLocalDate();
   registerContentAction();
-  assert.equal(shouldShowInterstitial(1000), false);
+  assert.equal(shouldShowInterstitial(1000), true);
   registerContentAction();
   assert.equal(shouldShowInterstitial(1000), true);
   registerInterstitialShown(1000);
   registerContentAction();
-  assert.equal(shouldShowInterstitial(61000), false);
+  assert.equal(shouldShowInterstitial(61000), true);
   registerContentAction();
   assert.equal(shouldShowInterstitial(60999), false);
   assert.equal(shouldShowInterstitial(61000), true);

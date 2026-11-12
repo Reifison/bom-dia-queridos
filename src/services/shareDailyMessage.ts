@@ -86,9 +86,9 @@ async function tryNativeShare(
       return 'cancelled';
     }
 
-    // Missing optional plugins or a native sharing failure can still use the
-    // browser-compatible fallback when the app is running in a web context.
-    return null;
+    // A second share sheet in WKWebView can remain pending indefinitely.
+    // Let the caller release its lock and report the native failure.
+    throw error;
   } finally {
     if (localFile) {
       try {
@@ -211,7 +211,11 @@ function normalizeFileName(fileName: string, mimeType = ''): string {
   return `${safeName}.${extension}`;
 }
 
-function isShareCancellation(error: unknown): boolean {
+export function isShareCancellation(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const native = error as { message?: unknown; errorMessage?: unknown };
+    if (native.message === 'Share canceled' || native.errorMessage === 'Share canceled') return true;
+  }
   return typeof DOMException !== 'undefined' &&
     error instanceof DOMException &&
     error.name === 'AbortError';
