@@ -1,3 +1,4 @@
+import type { MessageCollection } from '../constants/messageCollections';
 import type { DailyMessage, PeriodId } from '../types/period';
 import type { BankSelection } from './personalImageBank';
 import type { DailyQuota } from './dailyGeneration';
@@ -10,7 +11,6 @@ const AI_FAILURE_MESSAGES: Record<string, string> = {
   FIREBASE_AI_NETWORK_ERROR: 'Não foi possível conectar ao serviço de imagens. Verifique sua conexão.',
   FIREBASE_AI_OFFLINE: 'Conecte-se à internet para gerar uma imagem.',
   FIREBASE_AI_TIMEOUT: 'A geração da imagem demorou mais que o esperado. Tente novamente.',
-  FIREBASE_AI_QUOTA_EXCEEDED: 'O limite de gerações foi atingido. Tente novamente mais tarde.',
 };
 
 type ContentLogLevel = 'info' | 'warn';
@@ -41,8 +41,9 @@ export interface DailyContentFlowDependencies {
   isCurrent(period: PeriodId, day: string): boolean;
   readMessage(period: PeriodId, day: string): DailyMessage;
   writeMessage(message: DailyMessage, day: string): void;
-  selectImage(period: PeriodId, day: string, excludeImage?: string): Promise<BankSelection>;
-  selectText(period: PeriodId, day: string, excludeText?: string): Promise<string>;
+  selectImage(period: PeriodId, day: string, excludeImage?: string, bundledOnly?: boolean): Promise<BankSelection>;
+  selectText(period: PeriodId, day: string, excludeText?: string, image?: string): Promise<string>;
+  selectCollection?(period: PeriodId, day: string, collection: MessageCollection, excludeText: string): Promise<DailyMessage>;
   generateAi(period: PeriodId): Promise<string>;
   prepareAi(image: string): Promise<string>;
   saveAi(period: PeriodId, image: string, day: string): Promise<BankSelection>;
@@ -53,17 +54,6 @@ export interface DailyContentFlowDependencies {
   beforeAction(isCurrent: () => boolean): Promise<void>;
   onBusy(phase: ContentBusyPhase): void;
   onError(message: string | null): void;
-}
-
-function manualRefreshes(message: DailyMessage, day: string): number {
-  const progress = message.generationFlow;
-  return progress?.day === day && Number.isSafeInteger(progress.manualBankRefreshes) && progress.manualBankRefreshes >= 0
-    ? progress.manualBankRefreshes : 0;
-}
-
-/** A persisted bank refresh must happen before the one daily AI creation. */
-export function nextContentSource(message: DailyMessage, day: string, aiRemaining: number, aiAvailable: boolean): 'bank' | 'ai' {
-  return manualRefreshes(message, day) > 0 && aiRemaining > 0 && aiAvailable ? 'ai' : 'bank';
 }
 
 /**
@@ -97,7 +87,7 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
   };
 
   const run = async (
-    action: 'generate' | 'personal-photo',
+    action: 'offline' | 'generate' | 'personal-photo',
     period: PeriodId,
     day: string,
     work: (isCurrent: () => boolean) => Promise<ContentActionResult>,
@@ -106,12 +96,13 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
     const ticket = revision;
     const isCurrent = () => ticket === revision && deps.currentDay() === day && deps.isCurrent(period, day);
     if (!isCurrent()) return 'cancelled';
+    if (action === 'generate' && (!deps.aiAvailable() || quotaFor(day).remaining[period] <= 0)) return 'cancelled';
     busy = true;
     logContentFlow('action-started', { action, period });
     deps.onError(null);
-    deps.onBusy('ad');
     try {
       // Ad/network failure must not block the bank or the user's photo picker.
+      deps.onBusy('ad');
       try { await deps.beforeAction(isCurrent); } catch { /* Continue without an ad. */ }
       if (!isCurrent()) return 'cancelled';
       const result = await work(isCurrent);
@@ -142,7 +133,7 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
     const previous = deps.readMessage(period, day);
     let image: BankSelection;
     try {
-      image = await deps.selectImage(period, day, previous.bankImageId ?? previous.image);
+      image = await deps.selectImage(period, day, previous.bankImageId ?? previous.image, true);
       logContentFlow('bank-image-selected', { period, source: image.source, reason });
     } catch (error) {
       logContentFlow('bank-failed', { period, stage: 'image-selection', code: safeErrorCode(error) }, 'warn');
@@ -151,7 +142,7 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
     if (!isCurrent()) return 'cancelled';
     let mainText: string;
     try {
-      mainText = await deps.selectText(period, day, previous.mainText);
+      mainText = await deps.selectText(period, day, previous.mainText, image.image);
     } catch (error) {
       logContentFlow('bank-failed', { period, stage: 'text-selection', code: safeErrorCode(error) }, 'warn');
       throw error;
@@ -163,7 +154,6 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
       bankImageId: image.imageId,
       source: image.source,
       mainText,
-      generationFlow: { day, manualBankRefreshes: Math.min(Number.MAX_SAFE_INTEGER, manualRefreshes(previous, day) + 1) },
     }, day);
     logContentFlow('bank-completed', { period, source: image.source, reason });
     return 'updated';
@@ -174,13 +164,22 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
     isBusy() { return busy; },
     remainingAi(period: PeriodId, day: string) { return quotaFor(day).remaining[period]; },
 
-    generate(period: PeriodId, day: string): Promise<ContentActionResult> {
+    anotherMessage(period: PeriodId, day: string, collection?: MessageCollection): Promise<ContentActionResult> {
+      return run('offline', period, day, async (isCurrent) => {
+        if (!collection || !deps.selectCollection) return useBank(period, day, isCurrent, 'scheduled');
+        deps.onBusy('bank');
+        const previous = deps.readMessage(period, day);
+        const message = await deps.selectCollection(period, day, collection, previous.mainText);
+        if (!isCurrent()) return 'cancelled';
+        deps.writeMessage(message, day);
+        return 'updated';
+      });
+    },
+
+    createWithAi(period: PeriodId, day: string): Promise<ContentActionResult> {
       return run('generate', period, day, async (isCurrent) => {
         const previous = deps.readMessage(period, day);
-        if (nextContentSource(previous, day, quotaFor(day).remaining[period], deps.aiAvailable()) === 'bank') {
-          logContentFlow('source-selected', { period, source: 'bank' });
-          return useBank(period, day, isCurrent, 'scheduled');
-        }
+        if (!deps.aiAvailable() || quotaFor(day).remaining[period] <= 0) return 'cancelled';
 
         logContentFlow('source-selected', { period, source: 'firebase-ai' });
         deps.onBusy('ai');
@@ -190,9 +189,10 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
           generated = await deps.generateAi(period);
         } catch (error) {
           if (!isCurrent()) return 'cancelled';
-          logContentFlow('ai-request-failed', { period, code: safeErrorCode(error) }, 'warn');
+          const code = safeErrorCode(error);
+          logContentFlow('ai-request-failed', { period, code }, 'warn');
           const result = await useBank(period, day, isCurrent, 'ai-fallback');
-          if (isCurrent()) deps.onError(aiFailureMessage(error));
+          if (isCurrent() && code !== 'FIREBASE_AI_QUOTA_EXCEEDED') deps.onError(aiFailureMessage(error));
           return result;
         }
 
@@ -227,7 +227,6 @@ export function createDailyContentFlow(deps: DailyContentFlowDependencies) {
           bankImageId: saved?.imageId,
           source: 'firebase',
           mainText,
-          generationFlow: { day, manualBankRefreshes: Math.max(1, manualRefreshes(previous, day)) },
         }, day);
         logContentFlow('ai-card-updated', { period, banked: saved ? 'yes' : 'no' });
         if (!saved) deps.onError('A imagem está pronta, mas não foi possível guardá-la no seu banco. Confira o espaço disponível no aparelho.');

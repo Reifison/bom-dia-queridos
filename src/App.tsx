@@ -1,7 +1,9 @@
+import type { ArtworkReplacement } from './lib/messageArtRecovery';
 import { t } from './lib/locale';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Home } from 'lucide-react';
+import { getCollection, type MessageCollection } from './constants/messageCollections';
 import { ADS_ENABLED } from './constants/featureFlags';
 import { DetailView } from './features/detail/DetailView';
 import { HomeView } from './features/home/HomeView';
@@ -12,7 +14,7 @@ import { registerInterstitialShown, registerContentAction } from './lib/adCadenc
 import { createDailyContentFlow, type ContentBusyPhase } from './lib/dailyContentFlow';
 import { loadDailyQuota, saveDailyQuota } from './lib/dailyGeneration';
 import { getOfflineDailyMessage } from './lib/offlineDailyContent';
-import { addGeneratedBankImage, selectBankImage, selectBankMessage, type BankSelection } from './lib/personalImageBank';
+import { addGeneratedBankImage, selectBankImage, selectBankMessage } from './lib/personalImageBank';
 import { getTodayLocal, loadPeriodDayMessages, savePeriodDayMessage, type PeriodDayEntry } from './lib/periodDayCache';
 import { messageGreeting } from './lib/messageGreeting';
 import { isOfflineReadyMessage, type DailyMessage, type Period, type PeriodId } from './types/period';
@@ -64,8 +66,13 @@ export default function App() {
     isCurrent: (period, day) => selectedRef.current?.id === period && getTodayLocal() === day,
     readMessage: (period, day) => cachedMessage(messagesRef.current[period], day) ?? getOfflineDailyMessage(period, day),
     writeMessage: storeMessage,
-    selectImage: (period, day, excludeImage) => selectBankImage(period, day, { excludeImage }),
-    selectText: (period, day, excludeText) => selectBankMessage(period, day, { excludeText }),
+    selectImage: (period, day, excludeImage, bundledOnly) => selectBankImage(period, day, { excludeImage, bundledOnly }),
+    selectText: (period, day, excludeText, image) => selectBankMessage(period, day, { excludeText, image }),
+    selectCollection: async (periodId, day, collection, excludeText) => {
+      const { image } = getCollection(periodId, day, collection);
+      const mainText = await selectBankMessage(periodId, day, { collection, excludeText });
+      return { periodId, mainText, image, source: 'offline' };
+    },
     generateAi: generateFirebaseImage,
     prepareAi: prepareImageForBank,
     saveAi: addGeneratedBankImage,
@@ -82,12 +89,12 @@ export default function App() {
     ? cachedMessage(messages[selectedPeriod.id], today) ?? getOfflineDailyMessage(selectedPeriod.id, today)
     : null;
   const aiAvailability = getFirebaseAiAvailability();
-  const recoverArtwork = useCallback((original: DailyMessage, replacement: BankSelection, day: string) => {
+  const recoverArtwork = useCallback((original: DailyMessage, replacement: ArtworkReplacement, day: string) => {
     if (day !== getTodayLocal() || selectedRef.current?.id !== original.periodId) return;
     const latest = cachedMessage(messagesRef.current[original.periodId], day);
     if (latest && (latest.image !== original.image || latest.mainText !== original.mainText ||
       latest.textPosition?.x !== original.textPosition?.x || latest.textPosition?.y !== original.textPosition?.y)) return;
-    storeMessage({ ...original, image: replacement.image, bankImageId: replacement.imageId, source: replacement.source, offline: undefined }, day);
+    storeMessage({ ...original, mainText: replacement.mainText ?? original.mainText, image: replacement.image, bankImageId: replacement.imageId, source: replacement.source, offline: undefined }, day);
     setActionError(t('Usamos outra imagem do banco para preparar sua mensagem.'));
   }, [storeMessage]);
   const art = useMessageArt(currentMessage, selectedPeriod?.id, recoverArtwork);
@@ -114,8 +121,8 @@ export default function App() {
         }
         const previous = messagesRef.current[id]?.message;
         const image = await selectBankImage(id, today, { excludeImage: previous?.bankImageId ?? previous?.image });
-        const mainText = await selectBankMessage(id, today, { excludeText: previous?.mainText });
-        return { id, message: { periodId: id, image: image.image, bankImageId: image.imageId, source: image.source, mainText, generationFlow: { day: today, manualBankRefreshes: 0 } } satisfies DailyMessage };
+        const mainText = await selectBankMessage(id, today, { excludeText: previous?.mainText, image: image.image });
+        return { id, message: { periodId: id, image: image.image, bankImageId: image.imageId, source: image.source, mainText } satisfies DailyMessage };
       }));
       if (!active || getTodayLocal() !== today) return;
       const next: Partial<Record<PeriodId, PeriodDayEntry>> = {};
@@ -172,9 +179,15 @@ export default function App() {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   };
 
-  const generateNext = async () => {
+  const anotherMessage = async (collection?: MessageCollection) => {
     const period = selectedRef.current;
-    if (!shareLock.current && period && cacheReadyDay === getTodayLocal()) await flow.generate(period.id, getTodayLocal());
+    const day = getTodayLocal();
+    if (!shareLock.current && period && cacheReadyDay === day) await flow.anotherMessage(period.id, day, collection);
+  };
+  const createWithAi = async () => {
+    const period = selectedRef.current;
+    const day = getTodayLocal();
+    if (!shareLock.current && period && cacheReadyDay === day) await flow.createWithAi(period.id, day);
   };
   const useMyPhoto = async () => {
     const period = selectedRef.current;
@@ -227,9 +240,9 @@ export default function App() {
           ) : (
             <motion.div key={selectedPeriod.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} transition={{ duration: 0.2 }} className="app-screen detail-screen bg-theme-surface">
               <DetailView period={selectedPeriod} message={currentMessage!} onBack={goHome} onShare={shareMessage} onCopyText={copyText}
-                onGenerateNext={generateNext} onUsePhoto={useMyPhoto} busyPhase={busyPhase} isDayReady={cacheReadyDay === today}
+                onAnotherMessage={anotherMessage} onCreateWithAi={createWithAi} onUsePhoto={useMyPhoto} busyPhase={busyPhase} isDayReady={cacheReadyDay === today}
                 isSharing={isSharing} isPreparingArt={art.isPreparing} artPreviewUrl={art.url} artLayers={art.layers} onMoveText={movePersonalText}
-                actionError={actionError} online={online} aiAvailable={aiAvailability.available} />
+                actionError={actionError} online={online} aiAvailable={aiAvailability.available} aiRemaining={flow.remainingAi(selectedPeriod.id, today)} />
             </motion.div>
           )}
         </AnimatePresence>

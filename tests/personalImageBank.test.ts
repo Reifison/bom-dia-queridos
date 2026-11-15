@@ -1,3 +1,4 @@
+import { GREETING_IMAGES } from '../src/constants/greetingImages';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { IDBFactory, indexedDB } from 'fake-indexeddb';
@@ -49,7 +50,7 @@ async function openBank(): Promise<IDBDatabase> {
 }
 
 test('personal bank rotates bundled photos, persists AI images, deduplicates, and tracks messages', async (t) => {
-  const imagePool = [...new Set(OFFLINE_DAILY_IMAGES.morning.map((image) => image.src))];
+  const imagePool = [...OFFLINE_DAILY_IMAGES.morning, ...GREETING_IMAGES.morning].map((image) => image.src);
   const first = await selectBankImage('morning', day, { rng: () => 0 });
   const afterReload = await import('../src/lib/personalImageBank.ts?image-reload-check');
   const second = await afterReload.selectBankImage('morning', '2026-10-27', { rng: () => 0 });
@@ -129,20 +130,21 @@ test('fallback rotates every period completely and reuses a photo with another p
     const periods = ['morning', 'afternoon', 'night'] as const;
     const selected = new Map(periods.map((period) => [period, new Set<string>()]));
     const firstPair = new Map<string, { imageId: string; text: string }>();
-    for (let round = 0; round < 50; round += 1) {
+    for (let round = 0; round < 64; round += 1) {
       for (const period of periods) {
+        if (round >= OFFLINE_DAILY_IMAGES[period].length + GREETING_IMAGES[period].length) continue;
         const image = await bank.selectBankImage(period, dayAfter(round), { rng: () => 0 });
         const text = await bank.selectBankMessage(period, dayAfter(round), { rng: () => 0 });
-        assert.equal(selected.get(period)!.has(image.imageId), false, `${period} repeated before all 50 photos were used`);
+        assert.equal(selected.get(period)!.has(image.imageId), false, `${period} repeated before all bundled photos were used`);
         selected.get(period)!.add(image.imageId);
         if (round === 0) firstPair.set(period, { imageId: image.imageId, text });
       }
     }
-    // Simulate reloading the app after 150 interleaved choices, with no IndexedDB.
+    // Simulate reloading the app after a complete interleaved rotation, with no IndexedDB.
     const reloaded = await import('../src/lib/personalImageBank.ts?expanded-fallback-reload');
     for (const period of periods) {
-      const image = await reloaded.selectBankImage(period, dayAfter(50), { rng: () => 0 });
-      const text = await reloaded.selectBankMessage(period, dayAfter(50), { rng: () => 0 });
+      const image = await reloaded.selectBankImage(period, dayAfter(64), { rng: () => 0 });
+      const text = await reloaded.selectBankMessage(period, dayAfter(64), { rng: () => 0 });
       assert.equal(image.imageId, firstPair.get(period)!.imageId, 'a completed rotation may reuse the oldest photo');
       assert.notEqual(text, firstPair.get(period)!.text, 'the photo must be independent from its original phrase');
     }
@@ -180,7 +182,7 @@ test('schema 1 images are indexed on upgrade without losing their data', async (
       request.onerror = () => reject(request.error);
     });
 
-    const oldBundledPhotos = [...new Set(OFFLINE_DAILY_IMAGES.afternoon.map((image) => image.src))];
+    const oldBundledPhotos = [...new Set([...OFFLINE_DAILY_IMAGES.afternoon, ...GREETING_IMAGES.afternoon].map((image) => image.src))];
     await new Promise<void>((resolve, reject) => {
       const transaction = v1Database.transaction(['images', 'image-history', 'state'], 'readwrite');
       transaction.objectStore('images').put(fixture);
@@ -236,4 +238,21 @@ test('offline message selection uses independent language banks and history', as
 
   const nextEnglish = await selectBankMessage('morning', dayAfter(102), { locale: 'en', rng: () => 0 });
   assert.notEqual(nextEnglish, english, 'English history should prevent an immediate English repeat');
+});
+
+test('bundled themed images only receive compatible text in the selected locale', async () => {
+  const { greetingMessagesForImage } = await import('../src/constants/greetingImages');
+  const image = GREETING_IMAGES.morning.find(({ theme }) => theme === 'pets')!.src;
+  const compatible = greetingMessagesForImage('morning', image)!;
+  const first = await selectBankMessage('morning', day, { image, locale: 'pt', rng: () => 0 });
+  const second = await selectBankMessage('morning', day, { image, locale: 'pt', excludeText: first, rng: () => 0 });
+  assert.ok(compatible.includes(first));
+  assert.ok(compatible.includes(second));
+  assert.notEqual(first, second);
+  const english = await selectBankMessage('morning', day, { image, locale: 'en', rng: () => 0 });
+  assert.ok(greetingMessagesForImage('morning', image, 'en')?.includes(english));
+  assert.ok(!compatible.includes(english));
+  const { getCollection } = await import('../src/constants/messageCollections');
+  const birthday = await selectBankMessage('morning', day, { collection: 'birthday', locale: 'en', rng: () => 0 });
+  assert.ok(getCollection('morning', day, 'birthday', 'en').messages.some((text) => text === birthday));
 });

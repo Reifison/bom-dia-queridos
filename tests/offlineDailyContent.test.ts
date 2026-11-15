@@ -3,6 +3,7 @@ import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { greetingMessagesForImage } from '../src/constants/greetingImages';
 import { OFFLINE_MESSAGES, OFFLINE_MESSAGES_EN } from '../src/constants/offlineMessages';
 import {
   getOfflineDailyMessage,
@@ -94,8 +95,9 @@ test('offline messages and greetings follow the selected Portuguese or English l
   for (const period of periods) {
     const portuguese = getOfflineDailyMessage(period, day, 0, 'pt');
     const english = getOfflineDailyMessage(period, day, 0, 'en');
-    assert.ok(OFFLINE_MESSAGES[period].includes(portuguese.mainText));
-    assert.ok(OFFLINE_MESSAGES_EN[period].includes(english.mainText));
+    assert.ok((greetingMessagesForImage(period, portuguese.image) ?? OFFLINE_MESSAGES[period]).includes(portuguese.mainText));
+    assert.equal(english.image, portuguese.image);
+    assert.ok((greetingMessagesForImage(period, english.image, 'en') ?? OFFLINE_MESSAGES_EN[period]).includes(english.mainText));
     assert.notEqual(portuguese.mainText, english.mainText);
     assert.equal(OFFLINE_MESSAGES[period].length, OFFLINE_MESSAGES_EN[period].length);
     assert.ok(OFFLINE_MESSAGES_EN[period].length >= 30);
@@ -109,4 +111,75 @@ test('offline messages and greetings follow the selected Portuguese or English l
   assert.equal(messageGreeting('morning', 'en'), 'Good morning, friends!');
   assert.equal(messageGreeting('afternoon', 'en'), 'Good afternoon, friends!');
   assert.equal(messageGreeting('night', 'en'), 'Good night, friends!');
+});
+
+test('the new offline images only rotate through the messages for their own period and theme', async () => {
+  const { GREETING_IMAGES } = await import('../src/constants/greetingImages');
+  const { GREETING_MESSAGES } = await import('../src/constants/greetingMessages');
+  const expectedMessages = { morning: 100, afternoon: 50, night: 50 };
+  const allImages = new Set<string>();
+  for (const period of periods) {
+    const texts = Object.values(GREETING_MESSAGES[period]).flat();
+    assert.equal(texts.length, expectedMessages[period]);
+    assert.equal(new Set(texts).size, texts.length);
+    assert.equal(GREETING_IMAGES[period].filter(({ theme }) => theme === 'pets').length, 10);
+
+    for (const image of GREETING_IMAGES[period]) {
+      assert.ok(!allImages.has(image.src));
+      allImages.add(image.src);
+      await access(path.join(projectRoot, 'public', image.src.slice(1)));
+      assert.ok(greetingMessagesForImage(period, image.src)?.length);
+    }
+
+    const seen = { pt: new Set<string>(), en: new Set<string>() };
+    const date = new Date('2026-11-14T00:00:00Z');
+    for (let offset = 0; offset < 2_000; offset += 1) {
+      const day = date.toISOString().slice(0, 10);
+      for (const locale of ['pt', 'en'] as const) {
+        const message = getOfflineDailyMessage(period, day, 0, locale);
+        const compatible = greetingMessagesForImage(period, message.image, locale);
+        if (compatible) {
+          assert.ok(compatible.includes(message.mainText));
+          seen[locale].add(message.mainText);
+        }
+      }
+      date.setUTCDate(date.getUTCDate() + 1);
+    }
+    assert.equal(seen.pt.size, expectedMessages[period]);
+    assert.equal(seen.en.size, expectedMessages[period]);
+    assert.ok([...seen.en].every((text) => !seen.pt.has(text)));
+  }
+});
+
+test('all 200 collection phrases have a local, cacheable image for their period and occasion', async () => {
+  const { MESSAGE_COLLECTIONS, getCollection } = await import('../src/constants/messageCollections');
+  const { isOfflineReadyMessage } = await import('../src/types/period');
+  const collections = Object.keys(MESSAGE_COLLECTIONS) as (keyof typeof MESSAGE_COLLECTIONS)[];
+  const days = Array.from({ length: 7 }, (_, index) => `2026-11-${15 + index}`);
+  const counts = [42, 45, 35, 30, 16, 16, 8, 8];
+  const allTexts = new Set<string>();
+  const allEnglish = new Set<string>();
+  for (const [index, collection] of collections.entries()) {
+    for (const period of periods) {
+      const dates = collection === 'weekday' ? days : days.slice(0, 1);
+      const texts = new Set<string>();
+      for (const date of dates) {
+        const { image, messages } = getCollection(period, date, collection);
+        await access(path.join(projectRoot, 'public', image.slice(1)));
+        const english = getCollection(period, date, collection, 'en');
+        assert.equal(english.image, image);
+        assert.equal(english.messages.length, messages.length);
+        assert.ok(english.messages.every((text) => !messages.some((original) => original === text)));
+        english.messages.forEach((text) => allEnglish.add(text));
+        for (const mainText of messages) {
+          assert.ok(isOfflineReadyMessage({ periodId: period, source: 'offline', image, mainText }));
+          texts.add(mainText);
+          allTexts.add(mainText);
+        }
+      }
+      assert.equal(texts.size, counts[index], collection);
+    }
+  }
+  assert.equal(allTexts.size, 200);
+  assert.equal(allEnglish.size, 200);
 });

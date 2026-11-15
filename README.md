@@ -10,7 +10,7 @@ App React, Vite e Capacitor 8 com conteúdo local como caminho principal. As men
 
 - 108 frases locais, 36 para cada período: manhã, tarde e noite.
 - 150 fotos JPEG de 960 × 1200, 50 por período, ocupando 17.470.883 bytes no total (17,47 MB decimais; 16,66 MiB), média de 116 KB por foto; as fontes tipográficas também são locais.
-- Fotos e frases são armazenadas separadamente: são 1.800 combinações possíveis por período, 5.400 no total, sem duplicar fotografias para cada frase.
+- O acervo base permite 1.800 combinações por período. O app inclui também 45 imagens temáticas e frases em português e inglês para saudação e coleções.
 - No iPhone e Android, esse conteúdo já vem na instalação. No navegador, a primeira abertura precisa de conexão para guardar o app e seus recursos no cache offline.
 - Na primeira abertura de cada período do dia, o app escolhe uma composição do banco local — fotos do bundle e imagens de IA já salvas — e a persiste no IndexedDB. Reabrir o período no mesmo dia mantém a mesma mensagem e imagem.
 - A seleção local mantém histórico por período: evita repetições até consumir o conjunto disponível e, depois, prefere o item menos recente. Se houver alternativa, não repete imediatamente a imagem nem a frase atual.
@@ -30,11 +30,13 @@ O Vite abre o app em `http://localhost:3000`. Esse fluxo não precisa de `GEMINI
 
 A configuração Firebase pública padrão fica em [src/config/firebase.public.json](src/config/firebase.public.json). Os valores `VITE_FIREBASE_*` listados em [.env.example](.env.example) são overrides opcionais. Deixe-os iguais à configuração pública ou sem definição. Não inclua uma chave Gemini no app: Firebase AI Logic gerencia a autorização da Gemini Developer API no serviço.
 
-## Gerar outra imagem
+## Outra mensagem e geração com IA
 
-O primeiro toque em **Gerar outra** escolhe uma nova combinação do banco local. Depois dessa troca, um toque seguinte pode solicitar uma imagem com IA, desde que haja conexão, configuração Firebase válida e cota disponível. Há no máximo uma geração bem-sucedida por período e por dia. O Firebase SDK só é carregado nessa ação; não há inicialização de rede de IA na abertura do app. O modelo padrão é `gemini-3.1-flash-image`; imagens geradas podem incorrer em cobrança no plano Blaze.
+**Outra mensagem** escolhe uma nova combinação de imagem e frase do catálogo incluído no app. Use **Coleção** para escolher um tema antes de trocar a mensagem. As coleções funcionam offline.
 
-Quando a IA está indisponível, offline ou falha, o app troca para outra imagem e frase locais e mantém a cota de IA disponível. Após uma geração bem-sucedida, a imagem é preparada em JPEG com o lado maior limitado a 1280 px, proporção preservada e qualidade 0,85. Quando o IndexedDB consegue salvar, ela entra no banco persistente para uso futuro; se o armazenamento falhar, a imagem atual ainda pode ser compartilhada, mas não entra na rotação. Esse banco é separado do cache da mensagem diária.
+**Criar com IA** fica disponível com conexão, configuração Firebase válida e cota. O app permite uma geração bem-sucedida por período a cada dia. O SDK Firebase é carregado ao usar essa ação. O modelo padrão é `gemini-3.1-flash-image`. A geração pode incorrer em cobrança no plano Blaze.
+
+Se uma solicitação de IA falhar, o app usa uma composição do catálogo e preserva a cota local. Após uma geração bem-sucedida, a imagem é preparada em JPEG com o lado maior limitado a 1280 px, proporção preservada e qualidade 0,85. O IndexedDB salva a imagem no banco persistente para uso futuro. Se a gravação falhar, a imagem atual continua disponível para compartilhamento. O banco persistente e o cache diário têm armazenamentos separados.
 
 O projeto Firebase `bom-dia-queridos` já está com faturamento ativo e enforcement do App Check habilitado para Firebase AI Logic:
 
@@ -50,11 +52,11 @@ O limite diário mostrado pela interface é uma regra de experiência do app; n�
 
 **Usar minha foto** abre somente a biblioteca de fotos do aparelho, pelo seletor Photos de `@capacitor/camera` 8.2.6; não abre a câmera. A imagem é normalizada para JPEG e fica no cartão/mensagem diária deste aparelho. Ela não entra no banco de rotação, não é enviada ao Firebase nem usada como entrada de geração de IA. O cancelamento do seletor mantém o cartão como estava.
 
-O fluxo guarda uma trava única durante anúncio, seleção e geração para impedir ações duplicadas. Ao navegar para fora, a intenção de trocar o cartão é invalidada; uma imagem de IA que já tenha sido gerada ainda é guardada no banco correspondente.
+O fluxo guarda uma trava única durante anúncio, seleção e geração para impedir ações duplicadas. Ao navegar para fora, o app cancela a troca de cartão e ainda tenta guardar a imagem de IA que já tiver sido gerada.
 
 ## Anúncios no fluxo de conteúdo
 
-Na versão atual, a interface não oferece mais os dois créditos de geração por anúncios premiados; os cadastros e as unidades da conta AdMob não foram alterados por essa decisão. No app nativo, um interstitial só é tentado antes de gerar outra imagem, escolher uma foto pessoal ou compartilhar/salvar, quando está pré-carregado, após duas ações elegíveis e respeitando o intervalo mínimo de um minuto. Web, modo offline, falta de anúncio ou consentimento indisponível não bloqueiam a ação de conteúdo.
+No app nativo, o app pode tentar exibir um interstitial antes de trocar a mensagem, criar com IA, escolher uma foto pessoal ou compartilhar/salvar. A exibição depende da disponibilidade do anúncio e do consentimento. A ação de conteúdo continua disponível na web, offline e quando o anúncio ou o consentimento estão indisponíveis.
 
 ## Sincronizar os apps nativos
 
@@ -518,3 +520,12 @@ Evidências finais: `output/android-validation/validation.json`, `test_result_5.
 - [ ] Validar atestação Play Integrity de produção em instalação pela Google Play. O teste funcional aprovado no Test Lab utilizou depuração, sem desativar a proteção de produção.
 
 Relatório de envio: `output/android-release/submission-1.4.1-report.json`. Notas: `store-assets/google-play-1.4.1.json`. Logs reutilizados: `/tmp/bdq-validation/android-release-sync.log`, `/tmp/bdq-validation/android-release-build.log`. Caminhos reutilizados: `android/app/build`, `android/.gradle`, `/Users/reifison/.gradle`, `node_modules`, `dist`. Nenhum simulador criado ou redefinido. A política pública vinculada respondeu HTTP 200; sua versão de 24/08/2026 permaneceu no site e foi revisada sem contradição material com esta correção. Nenhum deploy do site foi feito. A publicação foi expressamente autorizada pelo usuário nesta conversa.
+
+## Registro de 14 de novembro de 2026
+
+- O catálogo offline recebeu 45 imagens JPEG, sendo 41 para saudações de manhã, tarde e noite e quatro para comemorações. A seleção combina a frase com o tema da imagem no idioma do app, português ou inglês.
+- O detalhe da mensagem ganhou oito coleções offline: Dia da semana, Família, amizade e amor, Carinho e apoio, Gratidão e fé, Aniversário, Conquistas, Natal e Ano Novo. A coleção Dia da semana usa a data local. As coleções usam o histórico de frases para variar o conteúdo.
+- A ação **Outra mensagem** usa o catálogo local e a coleção selecionada. **Criar com IA** virou uma ação explícita, com cota de uma geração bem-sucedida por dia e período. Quando o Firebase retorna erro de cota, o app mostra outra composição do catálogo sem exibir o alerta do provedor. A cota local esgotada desativa a ação de IA e mantém **Outra mensagem** disponível.
+- Quando a imagem de fundo falha ao preparar a arte, o app busca uma imagem incluída no bundle e, quando necessário, troca a frase para combinar com o tema. O cache diário passou a reconhecer também as imagens temáticas.
+- Os registros do dia mostram 153 testes aprovados e validação em navegador offline da coleção Aniversário nos dois idiomas. Os logs locais registram duas compilações iOS bem-sucedidas. Na conferência para este commit, passaram os 34 testes das áreas alteradas, a checagem de tipos, o build web e a conferência das 45 imagens no cache offline. Na execução completa desta sessão, 149 testes passaram e os quatro testes HTTP ficaram bloqueados pela permissão de abrir uma porta em `127.0.0.1`.
+- No iOS, a versão foi atualizada para **1.4.2, build 5**. Após a primeira tentativa de archive falhar por falta de espaço em disco, o archive e o upload ao App Store Connect foram concluídos. O último estado confirmado foi **aguardando processamento da Apple**. O Xcode relatou avisos de símbolos de depuração do Google Mobile Ads e do User Messaging Platform. O Android 1.4.2, código 5, já constava no histórico anterior.

@@ -1,4 +1,6 @@
+import { getCollection, type MessageCollection } from '../constants/messageCollections';
 import type { PeriodId } from '../types/period';
+import { GREETING_IMAGES, greetingMessagesForImage } from '../constants/greetingImages';
 import { OFFLINE_DAILY_IMAGES } from './offlineDailyContent';
 import { OFFLINE_MESSAGES_BY_LOCALE } from '../constants/offlineMessages';
 import { getAppLocale, type AppLocale } from './locale';
@@ -11,11 +13,14 @@ export interface BankSelection {
 
 export interface BankSelectionOptions {
   excludeImage?: string;
+  bundledOnly?: boolean;
   rng?: () => number;
 }
 
 export interface BankMessageOptions {
   excludeText?: string;
+  collection?: MessageCollection;
+  image?: string;
   rng?: () => number;
   locale?: AppLocale;
 }
@@ -34,9 +39,9 @@ const TRANSACTION_TIMEOUT_MS = 2_000;
 // user alternates between all three periods. Leave room for recent AI events.
 const MAX_FALLBACK_IMAGE_EVENTS = Math.max(
   128,
-  Object.values(OFFLINE_DAILY_IMAGES).reduce((total, images) => total + images.length, 0) * 2,
+  PERIOD_IDS.reduce((total, period) => total + OFFLINE_DAILY_IMAGES[period].length + GREETING_IMAGES[period].length, 0) * 2,
 );
-const MAX_MESSAGE_HISTORY = 128;
+const MAX_MESSAGE_HISTORY = 400;
 
 interface StoredImage {
   imageId: string;
@@ -234,7 +239,7 @@ function persistFallbackMetadata(metadata: FallbackMetadata): void {
 
 function createBundledCandidates(period: PeriodId): ImageCandidate[] {
   const unique = new Map<string, ImageCandidate>();
-  for (const image of OFFLINE_DAILY_IMAGES[period] ?? []) {
+  for (const image of [...OFFLINE_DAILY_IMAGES[period], ...GREETING_IMAGES[period]]) {
     if (typeof image?.src !== 'string' || !image.src) continue;
     const selection = { imageId: `offline:${image.src}`, image: image.src, source: 'offline' as const };
     unique.set(selection.imageId, selection);
@@ -388,7 +393,7 @@ function selectAndMarkImageInDatabase(period: PeriodId, day: string, options: Ba
           }
         }
         applyImageEvents(usage, metadata.imageHistory);
-        const candidates = candidatesForPeriod(period, imageCandidates);
+        const candidates = candidatesForPeriod(period, options.bundledOnly ? [] : imageCandidates);
         const candidate = chooseImage(candidates, usage, options);
         const baseSequence = Math.max(
           Number.isSafeInteger(savedSequence) && (savedSequence as number) >= 0 ? savedSequence as number : 0,
@@ -630,8 +635,11 @@ function stableTextKey(text: string): string {
   return `text-${fallbackChecksum(bytes)}`;
 }
 
-function uniqueMessages(period: PeriodId, locale: AppLocale): string[] {
-  const messages: readonly string[] = OFFLINE_MESSAGES_BY_LOCALE[locale][period];
+function uniqueMessages(period: PeriodId, day: string, locale: AppLocale, options: BankMessageOptions): string[] {
+  const themed = options.collection
+    ? getCollection(period, day, options.collection, locale).messages
+    : greetingMessagesForImage(period, options.image, locale);
+  const messages = themed ?? OFFLINE_MESSAGES_BY_LOCALE[locale][period];
   return [...new Set(messages.filter((message) => message.trim().length > 0))];
 }
 
@@ -691,7 +699,7 @@ function selectAndMarkMessageInDatabase(period: PeriodId, day: string, locale: A
           [...storedHistory.filter((event) => event.locale === locale), ...localHistory],
           (event) => `${event.sequence}:${event.locale}:${event.key}`,
         );
-        selected = chooseMessage(period, uniqueMessages(period, locale), history, options);
+        selected = chooseMessage(period, uniqueMessages(period, day, locale, options), history, options);
         nextSequence = Math.max(
           Number.isSafeInteger(savedSequence) && (savedSequence as number) >= 0 ? savedSequence as number : 0,
           metadata.sequence,
@@ -736,7 +744,7 @@ function markMessageInMemory(period: PeriodId, message: string, day: string, seq
 function fallbackSelectMessage(period: PeriodId, day: string, locale: AppLocale, options: BankMessageOptions): string {
   const metadata = readFallbackMetadata();
   const history = metadata.messageHistory[period].filter((event) => event.locale === locale);
-  const selected = chooseMessage(period, uniqueMessages(period, locale), history, options);
+  const selected = chooseMessage(period, uniqueMessages(period, day, locale, options), history, options);
   const sequence = Math.max(metadata.sequence, ...history.map((event) => event.sequence), 0) + 1;
   markMessageInMemory(period, selected, day, sequence, locale);
   return selected;

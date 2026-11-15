@@ -17,10 +17,6 @@ export interface DailyMessage {
   source?: 'offline' | 'firebase' | 'personal';
   bankImageId?: string;
   textPosition?: { x: number; y: number };
-  generationFlow?: {
-    day: string;
-    manualBankRefreshes: number;
-  };
   offline?: {
     origin: 'bundled';
     dayKey: string;
@@ -46,7 +42,7 @@ export function isDailyMessage(value: unknown): value is DailyMessage {
 }
 
 export function isBundledDailyImage(image: string): boolean {
-  return /^\/?images\/daily\/[a-z0-9-]+\.jpg$/.test(image);
+  return /^\/?images\/(?:daily|greetings)\/[a-z0-9-]+\.jpg$/.test(image);
 }
 
 /** Old remote cache entries remain stored, but never gate the offline daily flow. */

@@ -48,3 +48,31 @@ test('unrelated composition failures do not rotate bank photos', async () => {
     select: async () => { assert.fail('canvas errors cannot be fixed by changing photos'); },
   }), /CANVAS_UNAVAILABLE/);
 });
+
+test('a replacement photo receives compatible text when the original card had a theme', async () => {
+  const { GREETING_IMAGES, greetingMessagesForImage } = await import('../src/constants/greetingImages');
+  const original = GREETING_IMAGES.night.find(({ theme }) => theme === 'pets')!.src;
+  const replacement = GREETING_IMAGES.night.find(({ theme }) => theme === 'light')!;
+  const originalText = greetingMessagesForImage('night', original)![0];
+  const replacementText = greetingMessagesForImage('night', replacement.src)![0];
+
+  const result = await composeMessageArtWithRecovery(
+    { ...source, background: original, mainText: originalText },
+    'night',
+    '2026-10-26',
+    {
+      compose: async ({ background, mainText }) => {
+        if (background === original) throw new Error('SHARE_IMAGE_LOAD_FAILED');
+        assert.equal(background, replacement.src);
+        assert.equal(mainText, replacementText);
+        return { blob: new Blob(), width: 1080, height: 1350 };
+      },
+      select: async () => ({ image: replacement.src, imageId: replacement.key, source: 'offline' }),
+      selectText: async (_period, _day, options) => {
+        assert.equal(options?.image, replacement.src);
+        return replacementText;
+      },
+    },
+  );
+  assert.equal(result.replacement?.mainText, replacementText);
+});

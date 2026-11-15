@@ -1,6 +1,7 @@
+import { MESSAGE_COLLECTIONS, type MessageCollection } from '../../constants/messageCollections';
 import { t } from '../../lib/locale';
 import { useDuoLayout } from '../../hooks/useDuoLayout';
-import { Copy, Download, ImagePlus, RefreshCw, Share2, X } from 'lucide-react';
+import { Copy, Download, ImagePlus, RefreshCw, Share2, Sparkles, X } from 'lucide-react';
 import { IconCircleButton } from '../../components/ui/IconCircleButton';
 import { MessageArtPreview, MessageArtControls } from '../../components/MessageArtPreview';
 import type { ContentBusyPhase } from '../../lib/dailyContentFlow';
@@ -12,7 +13,9 @@ export interface DetailViewProps {
   onBack: () => void;
   onShare: () => Promise<void>;
   onCopyText: () => Promise<void>;
-  onGenerateNext: () => Promise<void>;
+  onAnotherMessage: (collection?: MessageCollection) => Promise<void>;
+  onCreateWithAi: () => Promise<void>;
+  aiRemaining: number;
   onUsePhoto: () => Promise<void>;
   busyPhase: ContentBusyPhase;
   isDayReady: boolean;
@@ -27,7 +30,7 @@ export interface DetailViewProps {
 }
 
 export function DetailView({
-  period, message, onBack, onShare, onCopyText, onGenerateNext, onUsePhoto,
+  period, message, onBack, onShare, onCopyText, onAnotherMessage, onCreateWithAi, aiRemaining, onUsePhoto,
   busyPhase, isDayReady, isSharing, isPreparingArt, artPreviewUrl, artLayers, onMoveText, actionError, online, aiAvailable,
 }: DetailViewProps) {
   const layout = useDuoLayout();
@@ -36,11 +39,8 @@ export function DetailView({
   const busy = busyPhase !== null;
   const unavailable = busy || !isDayReady || isSharing || editingPosition;
   const shareUnavailable = isSharing || isPreparingArt || editingPosition || busy;
-  const generateLabel = busyPhase === 'ai'
-    ? t('Criando imagem...')
-    : busyPhase === 'ad' || busyPhase === 'bank' || !isDayReady
-      ? t('Preparando...')
-      : t('Gerar outra');
+  const [collection, setCollection] = useState<MessageCollection | ''>('');
+  const anotherLabel = busyPhase === 'bank' || busyPhase === 'ad' || !isDayReady ? t('Preparando...') : t('Outra mensagem');
   const visibleError = actionError && /(?:\bVITE_[A-Z0-9_]+\b|\.env\b|\bfirebase\b|\bapp\s?check\b|\bgemini\b|\bgenai\b|\bapi\b|\b(?:type|reference|syntax)error\b|\bstack\s?trace\b|\bhttp\s?\d{3}\b)/i.test(actionError)
     ? t('Não foi possível preparar outra imagem agora. Sua mensagem continua disponível.') : actionError;
 
@@ -68,19 +68,33 @@ export function DetailView({
       <MessageArtControls message={message} layers={artLayers} editing={editingPosition}
         disabled={busy || !isDayReady || isSharing || isPreparingArt} onEditingChange={setEditingPosition} onMoveText={onMoveText} />
 
+      <label className="mb-3 flex items-center gap-3 text-sm font-semibold text-theme-on-surface-variant">
+        {t('Coleção')}
+        <select value={collection} disabled={unavailable} onChange={(event) => setCollection(event.target.value as MessageCollection | '')}
+          className="min-h-11 min-w-0 flex-1 rounded-xl border border-black/10 bg-theme-surface-lowest px-3 text-theme-primary">
+          <option value="">{t('Mensagem do dia')}</option>
+          {Object.entries(MESSAGE_COLLECTIONS).map(([id, label]) => <option key={id} value={id}>{t(label)}</option>)}
+        </select>
+      </label>
       <div className="primary-actions grid grid-cols-2 gap-4">
         <button type="button" onClick={onShare} disabled={shareUnavailable} aria-busy={isSharing || isPreparingArt}
           className="min-h-[88px] flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-theme-action-share-bg text-theme-action-share-fg active:scale-95 transition-transform shadow-sm disabled:opacity-60 disabled:cursor-wait focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-primary focus-visible:ring-offset-2">
           <div className="flex gap-2" aria-hidden="true"><Share2 size={20} /><Download size={20} /></div>
           <span className="text-sm font-semibold text-center">{isSharing || isPreparingArt ? t('Preparando imagem...') : t('Compartilhar / Salvar')}</span>
         </button>
-        <button type="button" onClick={onGenerateNext} disabled={unavailable} aria-busy={busy && busyPhase !== 'photo'}
+        <button type="button" onClick={() => void onAnotherMessage(collection || undefined)} disabled={unavailable} aria-busy={busyPhase === 'bank'}
           className="min-h-[88px] flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-theme-action-generate-bg text-theme-action-generate-fg active:scale-95 transition-transform shadow-sm disabled:opacity-60 disabled:cursor-wait focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-primary focus-visible:ring-offset-2">
-          <RefreshCw size={20} className={busy && busyPhase !== 'photo' ? 'animate-spin' : ''} aria-hidden="true" />
-          <span className="text-sm font-semibold text-center" aria-live="polite">{generateLabel}</span>
+          <RefreshCw size={20} className={busyPhase === 'bank' ? 'animate-spin' : ''} aria-hidden="true" />
+          <span className="text-sm font-semibold text-center" aria-live="polite">{anotherLabel}</span>
         </button>
       </div>
 
+      <button type="button" onClick={onCreateWithAi} disabled={unavailable || !online || !aiAvailable || aiRemaining < 1} aria-busy={busyPhase === 'ai'}
+        className="mt-4 min-h-12 w-full flex items-center justify-center gap-3 px-5 py-3 rounded-2xl bg-theme-surface-lowest text-theme-primary border border-black/10 font-semibold active:scale-[0.98] transition-transform disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-primary focus-visible:ring-offset-2">
+        <Sparkles size={20} aria-hidden="true" />
+        <span>{busyPhase === 'ai' ? t('Criando imagem...') : t('Criar com IA')}</span>
+      </button>
+      {online && aiAvailable && aiRemaining < 1 && <p className="mt-2 text-center text-sm text-theme-on-surface-variant">{t('Limite de IA de hoje atingido para este período.')}</p>}
       <button type="button" onClick={onUsePhoto} disabled={unavailable} aria-busy={busyPhase === 'photo'}
         className="mt-4 min-h-12 w-full flex items-center justify-center gap-3 px-5 py-3 rounded-2xl bg-theme-surface-lowest text-theme-primary border border-black/10 font-semibold active:scale-[0.98] transition-transform disabled:opacity-60 disabled:cursor-wait focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-primary focus-visible:ring-offset-2">
         <ImagePlus size={20} aria-hidden="true" />

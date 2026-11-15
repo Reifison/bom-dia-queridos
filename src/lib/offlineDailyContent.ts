@@ -1,4 +1,5 @@
 import type { DailyMessage, Period, PeriodId } from '../types/period';
+import { GREETING_IMAGES, greetingMessagesForImage } from '../constants/greetingImages';
 import { OFFLINE_MESSAGES_BY_LOCALE } from '../constants/offlineMessages';
 import { getAppLocale, type AppLocale } from './locale';
 
@@ -240,25 +241,28 @@ export function getOfflineDailyMessage(
   const periodId = resolvePeriod(period);
   const ordinal = dayOrdinal(dayKey);
   const offset = PERIOD_OFFSETS[periodId];
-  const messages = OFFLINE_MESSAGES_BY_LOCALE[locale][periodId];
-  const images = OFFLINE_DAILY_IMAGES[periodId];
+  const images = [...OFFLINE_DAILY_IMAGES[periodId], ...GREETING_IMAGES[periodId]];
 
-  const textIndex = modulo(
-    modulo(ordinal * MESSAGE_STEP, messages.length) +
-      offset +
-      modulo(variation, messages.length) * VARIATION_TEXT_STEP,
-    messages.length,
-  );
   const imageIndex = modulo(
-    modulo(ordinal, images.length) + offset + modulo(variation, images.length),
+    ordinal + offset + modulo(variation, images.length),
     images.length,
   );
+  const image = images[imageIndex];
+  const themedMessages = greetingMessagesForImage(periodId, image.src, locale);
+  const messages = themedMessages ?? OFFLINE_MESSAGES_BY_LOCALE[locale][periodId];
+  // Divide by the image cycle so every image can eventually use every text in its theme.
+  const textIndex = themedMessages
+    ? modulo(Math.floor(ordinal / images.length) + imageIndex + modulo(variation, messages.length), messages.length)
+    : modulo(
+      modulo(ordinal * MESSAGE_STEP, messages.length) + offset +
+        modulo(variation, messages.length) * VARIATION_TEXT_STEP,
+      messages.length,
+    );
   const layoutIndex = modulo(
     modulo(ordinal * 2, LAYOUT_IDS.length) + offset + modulo(variation, LAYOUT_IDS.length),
     LAYOUT_IDS.length,
   );
   const mainText = messages[textIndex];
-  const image = images[imageIndex];
   const layoutId = LAYOUT_IDS[layoutIndex];
 
   return {

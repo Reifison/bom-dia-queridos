@@ -1,9 +1,8 @@
 import { t } from '../lib/locale';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type ShareImageOptions, type ShareImageResult } from '../lib/shareImage';
-import { composeMessageArtWithRecovery } from '../lib/messageArtRecovery';
+import { composeMessageArtWithRecovery, type ArtworkReplacement } from '../lib/messageArtRecovery';
 import { getTodayLocal } from '../lib/periodDayCache';
-import type { BankSelection } from '../lib/personalImageBank';
 import { messageGreeting } from '../lib/messageGreeting';
 import type { DailyMessage, PeriodId } from '../types/period';
 
@@ -23,7 +22,7 @@ export interface ArtworkPreviewLayers {
 }
 
 /** Preview and sharing consume the very same rendered JPEG, including fonts and crop. */
-export function useMessageArt(message: DailyMessage | null, period?: PeriodId, onRecovered?: (original: DailyMessage, replacement: BankSelection, day: string) => void) {
+export function useMessageArt(message: DailyMessage | null, period?: PeriodId, onRecovered?: (original: DailyMessage, replacement: ArtworkReplacement, day: string) => void) {
   const source = useMemo<ShareImageOptions | null>(() => message && period ? {
     background: message.image,
     title: messageGreeting(period),

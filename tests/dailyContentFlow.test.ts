@@ -39,7 +39,7 @@ function createHarness() {
   const calls = {
     beforeAction: 0,
     events: [] as string[],
-    selectImage: [] as Array<{ period: PeriodId; day: string; excludeImage?: string }>,
+    selectImage: [] as Array<{ period: PeriodId; day: string; excludeImage?: string; bundledOnly?: boolean }>,
     selectText: [] as Array<{ period: PeriodId; day: string; excludeText?: string }>,
     generateAi: [] as Array<{ period: PeriodId }>,
     prepareAi: [] as string[],
@@ -73,8 +73,8 @@ function createHarness() {
       messages.set(key(message.periodId, day), message);
       calls.writes.push({ message, day });
     },
-    selectImage: async (period: PeriodId, day: string, excludeImage?: string): Promise<BankSelection> => {
-      calls.selectImage.push({ period, day, excludeImage });
+    selectImage: async (period: PeriodId, day: string, excludeImage?: string, bundledOnly?: boolean): Promise<BankSelection> => {
+      calls.selectImage.push({ period, day, excludeImage, bundledOnly });
       calls.events.push('bank');
       return {
         imageId: `bank:${calls.selectImage.length}`,
@@ -127,47 +127,33 @@ function createHarness() {
     quotas,
     deps,
     createFlow: () => createDailyContentFlow(deps),
-    seedMessage(period: PeriodId, day: string, message: DailyMessage) { messages.set(key(period, day), message); },
   };
 }
 
-function seedAfterManualRefresh(harness: ReturnType<typeof createHarness>, period: PeriodId, day: string): void {
-  harness.seedMessage(period, day, {
-    periodId: period,
-    mainText: 'Texto do cartão',
-    image: `/images/daily/${period}-01.jpg`,
-    source: 'offline',
-    generationFlow: { day, manualBankRefreshes: 1 },
-  });
-}
-
-test('the first refresh uses the bank, the second can use AI, and later refreshes return to the bank', async () => {
+test('catalog refreshes stay offline and explicit AI can run as the first action', async () => {
   const harness = createHarness();
-  const firstFlow = harness.createFlow();
+  const flow = harness.createFlow();
 
-  assert.equal(await firstFlow.generate('morning', DAY), 'updated');
-  assert.equal(harness.calls.selectImage.length, 1);
-  assert.equal(harness.calls.generateAi.length, 0);
-  assert.equal(firstFlow.remainingAi('morning', DAY), 1);
-  assert.equal(harness.messages.get(`${DAY}:morning`)?.generationFlow?.manualBankRefreshes, 1);
-
-  // A new flow instance reads both persisted message phase and daily allowance.
-  const secondFlow = harness.createFlow();
-  assert.equal(secondFlow.remainingAi('morning', DAY), 1);
-  assert.equal(await secondFlow.generate('morning', DAY), 'updated');
+  assert.equal(await flow.createWithAi('morning', DAY), 'updated');
   assert.equal(harness.calls.generateAi.length, 1);
-  assert.equal(harness.calls.saveAi.length, 1);
-  assert.deepEqual(harness.calls.events.slice(-3), ['ad', 'ai', 'save-ai'], 'AI work starts after the ad gate resolves');
-  assert.equal(harness.calls.saveAi[0].day, DAY);
-  assert.equal(secondFlow.remainingAi('morning', DAY), 0);
-  assert.equal(harness.messages.get(`${DAY}:morning`)?.source, 'firebase');
+  assert.deepEqual(harness.calls.events, ['ad', 'ai', 'save-ai']);
+  assert.equal(flow.remainingAi('morning', DAY), 0);
 
-  const thirdFlow = harness.createFlow();
-  assert.equal(thirdFlow.remainingAi('morning', DAY), 0);
-  assert.equal(await thirdFlow.generate('morning', DAY), 'updated');
-  assert.equal(harness.calls.selectImage.length, 2);
-  assert.equal(harness.calls.generateAi.length, 1, 'the one successful AI image consumes this period’s daily allowance');
-  assert.equal(harness.quotas.get(DAY)?.remaining.morning, 0);
+  const reopened = harness.createFlow();
+  assert.equal(await reopened.createWithAi('morning', DAY), 'cancelled');
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(await reopened.anotherMessage('morning', DAY), 'updated');
+    assert.equal(harness.messages.get(`${DAY}:morning`)?.source, 'offline');
+  }
+  assert.equal(harness.calls.generateAi.length, 1);
+  assert.ok(harness.calls.selectImage.every((selection) => selection.bundledOnly));
+  assert.deepEqual(harness.calls.events.slice(3), ['ad', 'bank', 'ad', 'bank', 'ad', 'bank']);
+
+  const newPeriod = createHarness();
+  newPeriod.state.beforeActionImpl = async () => { throw new Error('Ad unavailable'); };
+  assert.equal(await newPeriod.createFlow().anotherMessage('morning', DAY), 'updated');
+  assert.equal(newPeriod.calls.generateAi.length, 0);
+  assert.equal(newPeriod.quotas.size, 0);
 });
 
 test('two taps while the ad is pending start only one action', async () => {
@@ -176,14 +162,14 @@ test('two taps while the ad is pending start only one action', async () => {
   harness.state.beforeActionImpl = () => ad.promise;
   const flow = harness.createFlow();
 
-  const first = flow.generate('morning', DAY);
-  const duplicate = await flow.generate('morning', DAY);
+  const first = flow.createWithAi('morning', DAY);
+  const duplicate = await flow.anotherMessage('morning', DAY);
   assert.equal(duplicate, 'busy');
   assert.equal(harness.calls.beforeAction, 1);
   assert.equal(harness.calls.selectImage.length, 0);
   ad.resolve();
   assert.equal(await first, 'updated');
-  assert.equal(harness.calls.selectImage.length, 1);
+  assert.equal(harness.calls.generateAi.length, 1);
 });
 
 test('invalidation during the ad prevents both generation and opening the photo picker', async () => {
@@ -191,7 +177,7 @@ test('invalidation during the ad prevents both generation and opening the photo 
   const generateAd = createDeferred<void>();
   generateHarness.state.beforeActionImpl = () => generateAd.promise;
   const generateFlow = generateHarness.createFlow();
-  const generation = generateFlow.generate('morning', DAY);
+  const generation = generateFlow.createWithAi('morning', DAY);
   generateFlow.invalidate();
   generateAd.resolve();
   assert.equal(await generation, 'cancelled');
@@ -213,7 +199,6 @@ test('invalidation during the ad prevents both generation and opening the photo 
 
 test('an AI request finishing after navigation is saved and charged to its request day only', async () => {
   const harness = createHarness();
-  seedAfterManualRefresh(harness, 'morning', DAY);
   const generation = createDeferred<string>();
   let started!: () => void;
   const didStart = new Promise<void>((resolve) => { started = resolve; });
@@ -222,7 +207,7 @@ test('an AI request finishing after navigation is saved and charged to its reque
     return generation.promise;
   };
   const flow = harness.createFlow();
-  const action = flow.generate('morning', DAY);
+  const action = flow.createWithAi('morning', DAY);
   await didStart;
 
   harness.state.day = NEXT_DAY;
@@ -266,11 +251,10 @@ test('cancelled photos leave the card, bank, and quota untouched; a picked photo
 
 test('an AI generation error falls back to the bank without consuming the allowance', async () => {
   const harness = createHarness();
-  seedAfterManualRefresh(harness, 'morning', DAY);
   harness.state.generateImpl = async () => { throw new Error('GENERATION_UNAVAILABLE'); };
   const flow = harness.createFlow();
 
-  assert.equal(await flow.generate('morning', DAY), 'updated');
+  assert.equal(await flow.createWithAi('morning', DAY), 'updated');
   assert.equal(harness.calls.generateAi.length, 1);
   assert.equal(harness.calls.saveAi.length, 0);
   assert.equal(harness.calls.selectImage.length, 1);
@@ -279,14 +263,30 @@ test('an AI generation error falls back to the bank without consuming the allowa
   assert.equal(harness.messages.get(`${DAY}:morning`)?.source, 'offline');
 });
 
+test('Firebase quota errors show another catalog image without a warning', async () => {
+  const harness = createHarness();
+  harness.state.generateImpl = async () => {
+    throw Object.assign(new Error('Resource exhausted'), {
+      code: 'FIREBASE_AI_QUOTA_EXCEEDED',
+      userMessage: 'O limite de gerações foi atingido. Tente novamente mais tarde.',
+    });
+  };
+  const flow = harness.createFlow();
+
+  assert.equal(await flow.createWithAi('morning', DAY), 'updated');
+  assert.equal(harness.calls.selectImage.length, 1);
+  assert.equal(harness.messages.get(`${DAY}:morning`)?.source, 'offline');
+  assert.equal(harness.calls.errors.at(-1), null);
+  assert.equal(flow.remainingAi('morning', DAY), 1);
+});
+
 test('attestation failure preserves its actionable message and AI quota when falling back', async () => {
   const harness = createHarness();
-  seedAfterManualRefresh(harness, 'morning', DAY);
   harness.state.generateImpl = async () => {
     throw Object.assign(new Error('private upstream error'), { code: 'FIREBASE_AI_APPCHECK_FAILED' });
   };
   const flow = harness.createFlow();
-  assert.equal(await flow.generate('morning', DAY), 'updated');
+  assert.equal(await flow.createWithAi('morning', DAY), 'updated');
   assert.equal(flow.remainingAi('morning', DAY), 1);
   assert.equal(harness.messages.get(`${DAY}:morning`)?.source, 'offline');
   assert.equal(harness.calls.errors.at(-1), 'Não foi possível validar a segurança do app. Tente novamente.');
@@ -310,13 +310,12 @@ test('Firebase billing, model, and access errors preserve their actionable messa
 
   for (const failure of failures) {
     const harness = createHarness();
-    seedAfterManualRefresh(harness, 'morning', DAY);
     harness.state.generateImpl = async () => {
       throw Object.assign(new Error('provider detail stays private'), failure);
     };
     const flow = harness.createFlow();
 
-    assert.equal(await flow.generate('morning', DAY), 'updated');
+    assert.equal(await flow.createWithAi('morning', DAY), 'updated');
     assert.equal(harness.calls.errors.at(-1), failure.userMessage);
     assert.equal(flow.remainingAi('morning', DAY), 1, 'failed generation keeps the allowance available');
     assert.equal(harness.messages.get(`${DAY}:morning`)?.source, 'offline');
@@ -325,11 +324,10 @@ test('Firebase billing, model, and access errors preserve their actionable messa
 
 test('AI storage failure shows a clear warning and does not claim the image was banked', async () => {
   const harness = createHarness();
-  seedAfterManualRefresh(harness, 'morning', DAY);
   harness.state.saveImpl = async () => { throw new Error('STORAGE_FULL'); };
   const flow = harness.createFlow();
 
-  assert.equal(await flow.generate('morning', DAY), 'updated');
+  assert.equal(await flow.createWithAi('morning', DAY), 'updated');
   const savedCard = harness.messages.get(`${DAY}:morning`)!;
   assert.equal(savedCard.image, 'prepared:generated-image');
   assert.equal(savedCard.source, 'firebase');
@@ -343,14 +341,13 @@ for (const failure of ['request', 'preparation']) {
   test(`repeated good-night ${failure} errors always replace the image with another from the bank`, async () => {
     const harness = createHarness();
     harness.state.activePeriod = 'night';
-    seedAfterManualRefresh(harness, 'night', DAY);
     const reject = async () => { throw new Error('AI_IMAGE_FAILED'); };
     if (failure === 'request') harness.state.generateImpl = reject;
     else harness.state.prepareImpl = reject;
     const flow = harness.createFlow();
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const previous = harness.messages.get(`${DAY}:night`)!;
-      assert.equal(await flow.generate('night', DAY), 'updated');
+      const previous = harness.deps.readMessage('night', DAY);
+      assert.equal(await flow.createWithAi('night', DAY), 'updated');
       const current = harness.messages.get(`${DAY}:night`)!;
       assert.notEqual(current.image, previous.image);
       assert.equal(harness.calls.selectImage.at(-1)?.excludeImage, previous.bankImageId ?? previous.image);
